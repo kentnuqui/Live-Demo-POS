@@ -48,7 +48,7 @@ Do **not** commit `.env`.
 
    You should see `{ "status": "success", "data": { "ok": true } }`.
 
-On first start the service runs `db push` + seed (safe to re-run; seed skips if data exists).
+On first start the service runs schema sync + seed (safe to re-run; seed skips if data exists). Prisma Client is generated only during **build**, not at start (avoids free-tier OOM).
 
 **Note:** Free web services sleep after ~15 minutes idle. The first request after sleep can take ~1 minute.
 

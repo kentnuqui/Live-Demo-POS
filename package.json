@@ -18,7 +18,7 @@
     "db:generate": "npm run db:generate -w @towns/server",
     "db:push": "dotenv -e .env -- npm run db:push -w @towns/server",
     "db:seed": "dotenv -e .env -- npm run db:seed -w @towns/server",
-    "db:setup": "npm run db:push && npm run db:seed",
+    "db:setup": "dotenv -e .env -- npm run db:setup -w @towns/server",
     "start:api": "npm run start -w @towns/server"
   },
   "devDependencies": {

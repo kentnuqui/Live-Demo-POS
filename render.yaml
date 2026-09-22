@@ -9,7 +9,7 @@ services:
     plan: free
     region: oregon
     buildCommand: npm install && npm run build:api
-    startCommand: npm run db:deploy -w @towns/server && npm run start:api
+    startCommand: npm run boot -w @towns/server
     healthCheckPath: /api/health
     envVars:
       - key: NODE_ENV
