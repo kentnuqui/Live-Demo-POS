@@ -505,18 +505,22 @@ export async function seedModifiers() {
     }
   }
 
-  console.log('🎉 Modifier seeding completed!')
+  console.log('Modifier seeding completed')
 }
 
-// Run if called directly
-if (require.main === module) {
+/** Only auto-run when this file is the process entrypoint (not when imported by seed.ts). */
+const isDirectRun =
+  typeof process.argv[1] === 'string' &&
+  (process.argv[1].endsWith('seed-modifiers.ts') || process.argv[1].endsWith('seed-modifiers.js'))
+
+if (isDirectRun) {
   seedModifiers()
     .then(() => {
-      console.log('✅ Modifier seed completed')
+      console.log('Modifier seed completed')
       process.exit(0)
     })
     .catch((e) => {
-      console.error('❌ Modifier seed failed:', e)
+      console.error('Modifier seed failed:', e)
       process.exit(1)
     })
     .finally(() => {

@@ -8,8 +8,9 @@ services:
     runtime: node
     plan: free
     region: oregon
-    buildCommand: npm install && npm run build:api
-    startCommand: npm run boot -w @towns/server
+    # DB sync + seed happen at build so start only binds the HTTP port (health checks pass).
+    buildCommand: npm install && npm run build:api && npm run db:deploy -w @towns/server
+    startCommand: npm run start:api
     healthCheckPath: /api/health
     envVars:
       - key: NODE_ENV

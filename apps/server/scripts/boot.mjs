@@ -1,25 +1,23 @@
 #!/usr/bin/env node
 /**
- * Render boot: sync schema + seed (idempotent), then start the API.
- * Skips `prisma generate` at runtime — the client is produced during build.
+ * Optional Render boot helper: sync schema + seed, then start the API.
+ * Prefer build-time `db:deploy` + `npm run start:api` on free tier so health checks pass quickly.
  */
 import { spawn } from 'node:child_process'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
-const serverDir = resolve(root, 'apps/server')
+const serverDir = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 
 /**
  * @param {string} command
  * @param {string[]} args
- * @param {string} cwd
  */
-function run(command, args, cwd) {
+function run(command, args) {
   return new Promise((resolvePromise, reject) => {
     console.log(`[boot] ${command} ${args.join(' ')}`)
     const child = spawn(command, args, {
-      cwd,
+      cwd: serverDir,
       stdio: 'inherit',
       env: process.env,
       shell: true
@@ -33,9 +31,9 @@ function run(command, args, cwd) {
 }
 
 async function main() {
-  await run('npx', ['prisma', 'db', 'push', '--skip-generate'], serverDir)
-  await run('npx', ['tsx', 'prisma/seed.ts'], serverDir)
-  await run('node', ['dist/index.js'], serverDir)
+  await run('npx', ['prisma', 'db', 'push', '--skip-generate'])
+  await run('npx', ['tsx', 'prisma/seed.ts'])
+  await run('node', ['dist/index.js'])
 }
 
 main().catch((error) => {

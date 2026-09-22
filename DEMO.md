@@ -48,7 +48,7 @@ Do **not** commit `.env`.
 
    You should see `{ "status": "success", "data": { "ok": true } }`.
 
-On first start the service runs schema sync + seed (safe to re-run; seed skips if data exists). Prisma Client is generated only during **build**, not at start (avoids free-tier OOM).
+On **build**, Render runs schema sync + seed (safe to re-run; seed skips if data exists). **Start** only launches the API so health checks pass quickly. Prisma Client is generated during build (`--skip-generate` on push).
 
 **Note:** Free web services sleep after ~15 minutes idle. The first request after sleep can take ~1 minute.
 
