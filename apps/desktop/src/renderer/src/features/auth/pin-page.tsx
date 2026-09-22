@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { Delete } from 'lucide-react'
 import { Mark } from '@/components/mark'
-import { ApiError, api, isNetworkError } from '@/lib/api'
+import { ApiError, api, apiBase, isNetworkError } from '@/lib/api'
 import { rememberPin, unlockOffline } from '@/lib/offline-auth'
 import { cn } from '@/lib/utils'
 import { homePath } from '@/lib/nav'
@@ -33,7 +33,7 @@ export function PinPage() {
           navigate(homePath(user.role))
           return
         }
-        setError('No saved PIN on this terminal')
+        setError(`Can't reach API (${apiBase}). Check VITE_API_URL on Netlify.`)
       } else {
         setError(caught instanceof ApiError ? caught.message : 'PIN is incorrect')
       }
@@ -82,7 +82,8 @@ export function PinPage() {
           )
         )}
       </div>
-      {error ? <p className="text-sm text-accent">{error}</p> : <p className="text-sm text-muted-foreground">Four digits</p>}
+      {error ? <p className="max-w-sm text-center text-sm text-accent">{error}</p> : <p className="text-sm text-muted-foreground">Four digits</p>}
+      <p className="max-w-sm truncate text-center text-xs text-muted-foreground">API: {apiBase}</p>
       <Link to="/login" className="text-sm text-muted-foreground">
         Email sign in
       </Link>

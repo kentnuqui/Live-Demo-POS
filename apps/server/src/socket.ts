@@ -2,14 +2,19 @@ import type { Server as HttpServer } from 'node:http'
 import { Server } from 'socket.io'
 import { canAccessBranch } from '@towns/shared'
 import { env } from './config/env.js'
-import { parseClientOrigins } from './config/origins.js'
+import { isAllowedOrigin, parseClientOrigins } from './config/origins.js'
 import { bindSocket } from './lib/events.js'
 import { verifyAccessToken } from './lib/tokens.js'
 
 /** Realtime fan-out. Terminals join the branch room after they present an access token. */
 export function attachSocket(server: HttpServer): void {
+  const allowed = parseClientOrigins(env.CLIENT_ORIGIN)
   const io = new Server(server, {
-    cors: { origin: parseClientOrigins(env.CLIENT_ORIGIN) }
+    cors: {
+      origin(origin, callback) {
+        callback(null, isAllowedOrigin(origin, allowed))
+      }
+    }
   })
 
   io.use((socket, next) => {
