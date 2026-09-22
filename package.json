@@ -1,0 +1,31 @@
+{
+  "name": "towns-diner-pos",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Towns — a Japanese-inspired, offline-first restaurant POS.",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "build:shared": "npm run build -w @towns/shared",
+    "build:web": "npm run build:shared && npm run build:web -w @towns/desktop",
+    "build:api": "npm run build:shared && npm run db:generate -w @towns/server && npm run build -w @towns/server",
+    "dev": "npm run build:shared && concurrently -n api,pos -c cyan,magenta \"npm run dev -w @towns/server\" \"npm run dev -w @towns/desktop\"",
+    "dev:server": "npm run build:shared && npm run dev -w @towns/server",
+    "dev:desktop": "npm run build:shared && npm run dev -w @towns/desktop",
+    "typecheck": "npm run typecheck -w @towns/shared && npm run typecheck -w @towns/server && npm run typecheck -w @towns/desktop",
+    "db:generate": "npm run db:generate -w @towns/server",
+    "db:push": "dotenv -e .env -- npm run db:push -w @towns/server",
+    "db:seed": "dotenv -e .env -- npm run db:seed -w @towns/server",
+    "db:setup": "npm run db:push && npm run db:seed",
+    "start:api": "npm run start -w @towns/server"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1",
+    "dotenv-cli": "^8.0.0"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

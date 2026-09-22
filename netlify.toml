@@ -1,0 +1,14 @@
+[build]
+  command = "npm run build:web"
+  publish = "apps/desktop/dist-web"
+
+[build.environment]
+  NODE_VERSION = "22"
+  # Skip Electron binary download — the Netlify demo uses the Vite web build only.
+  ELECTRON_SKIP_BINARY_DOWNLOAD = "1"
+
+# HashRouter is used, but keep SPA fallback for any non-hash deep links.
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200

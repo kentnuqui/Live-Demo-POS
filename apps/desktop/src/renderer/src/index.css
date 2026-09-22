@@ -1,0 +1,82 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --background: 40 33% 96%;
+  --foreground: 30 8% 11%;
+  --card: 40 50% 99%;
+  --muted: 36 18% 92%;
+  --muted-foreground: 30 6% 40%;
+  --border: 36 16% 86%;
+  --primary: 30 8% 12%;
+  --primary-foreground: 40 33% 97%;
+  --accent: 16 64% 40%;
+  --accent-foreground: 40 40% 98%;
+  --ring: 30 8% 12%;
+  color-scheme: light;
+}
+
+.dark {
+  --background: 40 6% 6%;
+  --foreground: 40 20% 94%;
+  --card: 36 6% 10%;
+  --muted: 36 5% 15%;
+  --muted-foreground: 36 8% 70%;
+  --border: 36 5% 18%;
+  --primary: 40 20% 94%;
+  --primary-foreground: 30 8% 10%;
+  --accent: 16 52% 62%;
+  --accent-foreground: 30 10% 10%;
+  --ring: 40 20% 94%;
+  color-scheme: dark;
+}
+
+* {
+  border-color: hsl(var(--border));
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: hsl(var(--background));
+  color: hsl(var(--foreground));
+  font-family: "DM Sans", ui-sans-serif, system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+.paper-grid {
+  background-image: radial-gradient(hsl(var(--foreground) / 0.08) 0.6px, transparent 0.6px);
+  background-size: 22px 22px;
+}
+
+.rise {
+  animation: rise 240ms ease;
+}
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.num {
+  font-variant-numeric: tabular-nums;
+}

@@ -1,0 +1,20 @@
+Role	Email	Password	PIN
+Manager
+manager@towns.test
+Towns#Manager1
+1001
+
+Cashier
+cashier@towns.test
+Towns#Cash1
+2001
+
+Waiter
+waiter@towns.test
+Towns#Waiter1
+3001
+
+Kitchen
+kitchen@towns.test
+Towns#Kitchen1
+4001

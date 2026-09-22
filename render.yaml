@@ -1,0 +1,36 @@
+# One-click API + Postgres for the live demo.
+# Dashboard: New → Blueprint → connect this repo → apply.
+# After Netlify is live, set CLIENT_ORIGIN to your Netlify URL (e.g. https://towns-pos.netlify.app).
+
+services:
+  - type: web
+    name: towns-api
+    runtime: node
+    plan: free
+    region: oregon
+    buildCommand: npm install && npm run build:api
+    startCommand: npm run db:deploy -w @towns/server && npm run start:api
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: NPM_CONFIG_PRODUCTION
+        value: "false"
+      - key: DATABASE_URL
+        fromDatabase:
+          name: towns-db
+          property: connectionString
+      - key: JWT_ACCESS_SECRET
+        generateValue: true
+      - key: JWT_REFRESH_SECRET
+        generateValue: true
+      - key: PIN_PEPPER
+        generateValue: true
+      - key: CLIENT_ORIGIN
+        sync: false
+
+databases:
+  - name: towns-db
+    plan: free
+    databaseName: towns_pos
+    user: towns

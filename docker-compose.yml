@@ -1,0 +1,14 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: towns_pos
+    ports:
+      - "5432:5432"
+    volumes:
+      - towns_pg:/var/lib/postgresql/data
+
+volumes:
+  towns_pg:

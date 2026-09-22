@@ -1,0 +1,626 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  SUPER_ADMIN
+  ADMIN
+  RESTAURANT_MANAGER
+  CASHIER
+  WAITER
+  KITCHEN_STAFF
+  BARTENDER
+  INVENTORY_STAFF
+
+  @@map("user_role")
+}
+
+enum TableStatus {
+  AVAILABLE
+  OCCUPIED
+  RESERVED
+  CLEANING
+  BILLING
+
+  @@map("table_status")
+}
+
+enum TableShape {
+  SQUARE
+  ROUND
+  RECTANGLE
+  BAR
+
+  @@map("table_shape")
+}
+
+enum TableZone {
+  DINING
+  VIP
+  BAR
+  PATIO
+
+  @@map("table_zone")
+}
+
+enum ReservationType {
+  WALK_IN
+  ADVANCE
+
+  @@map("reservation_type")
+}
+
+enum ReservationStatus {
+  PENDING
+  CONFIRMED
+  SEATED
+  COMPLETED
+  CANCELLED
+  NO_SHOW
+
+  @@map("reservation_status")
+}
+
+enum WaitlistStatus {
+  WAITING
+  NOTIFIED
+  SEATED
+  CANCELLED
+  NO_SHOW
+
+  @@map("waitlist_status")
+}
+
+enum OrderType {
+  DINE_IN
+  TAKEOUT
+  DELIVERY
+  ONLINE
+  QR
+
+  @@map("order_type")
+}
+
+enum OrderStatus {
+  OPEN
+  SENT
+  PREPARING
+  READY
+  SERVED
+  BILLING
+  COMPLETED
+  CANCELLED
+
+  @@map("order_status")
+}
+
+enum DiningProgress {
+  SEATED
+  ORDERED
+  PREPARING
+  SERVED
+  BILLING
+  COMPLETED
+
+  @@map("dining_progress")
+}
+
+enum OrderSource {
+  POS
+  QR
+  ONLINE
+
+  @@map("order_source")
+}
+
+enum DiscountKind {
+  NONE
+  PERCENT
+  AMOUNT
+
+  @@map("discount_kind")
+}
+
+enum PaymentMethod {
+  CASH
+  CARD
+  OTHER
+
+  @@map("payment_method")
+}
+
+enum MenuStation {
+  KITCHEN
+  SUSHI
+  BAR
+  DESSERT
+
+  @@map("menu_station")
+}
+
+enum PrinterKind {
+  RECEIPT
+  KITCHEN
+  BAR
+  SUSHI
+  DESSERT
+
+  @@map("printer_kind")
+}
+
+enum PrinterConnection {
+  NETWORK
+  USB
+  BLUETOOTH
+
+  @@map("printer_connection")
+}
+
+model RestaurantProfile {
+  id        String   @id @default(uuid())
+  name      String
+  legalName String   @default("") @map("legal_name")
+  tagline   String   @default("")
+  phone     String   @default("")
+  email     String   @default("")
+  address   String   @default("")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("restaurant_profiles")
+}
+
+model Branch {
+  id        String   @id @default(uuid())
+  name      String
+  code      String   @unique
+  address   String   @default("")
+  city      String   @default("")
+  phone     String   @default("")
+  timezone  String   @default("Asia/Tokyo")
+  isActive  Boolean  @default(true) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  settings       BranchSettings?
+  users          User[]
+  floorPlans     FloorPlan[]
+  tables         DiningTable[]
+  printers       Printer[]
+  reservations   Reservation[]
+  waitlist       WaitlistEntry[]
+  orders         Order[]
+  categories     MenuCategory[]
+  modifierGroups ModifierGroup[]
+  qrTokens       QrToken[]
+  tombstones     Tombstone[]
+
+  @@map("branches")
+}
+
+model User {
+  id           String   @id @default(uuid())
+  email        String?  @unique
+  passwordHash String?  @map("password_hash")
+  pinLookup    String?  @unique @map("pin_lookup")
+  firstName    String   @map("first_name")
+  lastName     String   @map("last_name")
+  role         UserRole
+  branchId     String?  @map("branch_id")
+  isActive     Boolean  @default(true) @map("is_active")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  branch        Branch?        @relation(fields: [branchId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  refreshTokens RefreshToken[]
+  orders        Order[]        @relation("ServerOrders")
+  payments      Payment[]      @relation("CashierPayments")
+  refunds       Refund[]       @relation("CashierRefunds")
+
+  @@index([branchId])
+  @@map("users")
+}
+
+model RefreshToken {
+  id        String    @id @default(uuid())
+  userId    String    @map("user_id")
+  tokenHash String    @unique @map("token_hash")
+  expiresAt DateTime  @map("expires_at")
+  revokedAt DateTime? @map("revoked_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+
+  @@index([userId])
+  @@map("refresh_tokens")
+}
+
+model BranchSettings {
+  id                  String   @id @default(uuid())
+  branchId            String   @unique @map("branch_id")
+  currency            String   @default("USD")
+  serviceChargeBps    Int      @default(0) @map("service_charge_bps")
+  serviceChargeLabel  String   @default("Service") @map("service_charge_label")
+  receiptHeader       String   @default("") @map("receipt_header")
+  receiptFooter       String   @default("Thank you") @map("receipt_footer")
+  showServerOnReceipt Boolean  @default(true) @map("show_server_on_receipt")
+  showTableOnReceipt  Boolean  @default(true) @map("show_table_on_receipt")
+  createdAt           DateTime @default(now()) @map("created_at")
+  updatedAt           DateTime @updatedAt @map("updated_at")
+
+  branch Branch @relation(fields: [branchId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+
+  @@map("branch_settings")
+}
+
+model Printer {
+  id         String            @id @default(uuid())
+  branchId   String            @map("branch_id")
+  name       String
+  kind       PrinterKind
+  connection PrinterConnection @default(NETWORK)
+  address    String            @default("")
+  paperWidth Int               @default(80) @map("paper_width")
+  isDefault  Boolean           @default(false) @map("is_default")
+  isActive   Boolean           @default(true) @map("is_active")
+  createdAt  DateTime          @default(now()) @map("created_at")
+  updatedAt  DateTime          @updatedAt @map("updated_at")
+
+  branch Branch @relation(fields: [branchId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+
+  @@index([branchId])
+  @@map("printers")
+}
+
+model FloorPlan {
+  id        String   @id @default(uuid())
+  branchId  String   @map("branch_id")
+  name      String
+  isDefault Boolean  @default(false) @map("is_default")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  branch Branch        @relation(fields: [branchId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  tables DiningTable[]
+
+  @@index([branchId])
+  @@map("floor_plans")
+}
+
+model DiningTable {
+  id          String      @id @default(uuid())
+  branchId    String      @map("branch_id")
+  floorPlanId String      @map("floor_plan_id")
+  label       String
+  zone        TableZone   @default(DINING)
+  shape       TableShape  @default(SQUARE)
+  seats       Int         @default(4)
+  posX        Float       @default(8) @map("pos_x")
+  posY        Float       @default(8) @map("pos_y")
+  width       Float       @default(14)
+  height      Float       @default(16)
+  rotation    Float       @default(0)
+  status      TableStatus @default(AVAILABLE)
+  createdAt   DateTime    @default(now()) @map("created_at")
+  updatedAt   DateTime    @updatedAt @map("updated_at")
+
+  branch       Branch        @relation(fields: [branchId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  floorPlan    FloorPlan     @relation(fields: [floorPlanId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  orders       Order[]
+  reservations Reservation[]
+  qrTokens     QrToken[]
+
+  @@unique([floorPlanId, label])
+  @@index([branchId, status])
+  @@index([updatedAt])
+  @@map("dining_tables")
+}
+
+model Reservation {
+  id                 String            @id @default(uuid())
+  branchId           String            @map("branch_id")
+  tableId            String?           @map("table_id")
+  type               ReservationType
+  status             ReservationStatus @default(CONFIRMED)
+  guestName          String            @map("guest_name")
+  guestPhone         String            @default("") @map("guest_phone")
+  guestCount         Int               @map("guest_count")
+  reservedAt         DateTime          @map("reserved_at")
+  durationMinutes    Int               @default(90) @map("duration_minutes")
+  depositAmountCents Int               @default(0) @map("deposit_amount_cents")
+  depositPaid        Boolean           @default(false) @map("deposit_paid")
+  notes              String            @default("")
+  createdAt          DateTime          @default(now()) @map("created_at")
+  updatedAt          DateTime          @updatedAt @map("updated_at")
+
+  branch Branch       @relation(fields: [branchId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  table  DiningTable? @relation(fields: [tableId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+
+  @@index([branchId, reservedAt])
+  @@index([updatedAt])
+  @@map("reservations")
+}
+
+model WaitlistEntry {
+  id                   String         @id @default(uuid())
+  branchId             String         @map("branch_id")
+  guestName            String         @map("guest_name")
+  guestPhone           String         @default("") @map("guest_phone")
+  partySize            Int            @map("party_size")
+  queueNumber          Int            @map("queue_number")
+  estimatedWaitMinutes Int            @map("estimated_wait_minutes")
+  status               WaitlistStatus @default(WAITING)
+  notes                String         @default("")
+  notifiedAt           DateTime?      @map("notified_at")
+  seatedAt             DateTime?      @map("seated_at")
+  createdAt            DateTime       @default(now()) @map("created_at")
+  updatedAt            DateTime       @updatedAt @map("updated_at")
+
+  branch        Branch            @relation(fields: [branchId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  notifications NotificationLog[]
+
+  @@index([branchId, status])
+  @@index([updatedAt])
+  @@map("waitlist_entries")
+}
+
+model NotificationLog {
+  id              String   @id @default(uuid())
+  branchId        String   @map("branch_id")
+  waitlistEntryId String   @map("waitlist_entry_id")
+  channel         String
+  destination     String
+  body            String
+  status          String
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  entry WaitlistEntry @relation(fields: [waitlistEntryId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+
+  @@index([waitlistEntryId])
+  @@map("notification_logs")
+}
+
+model MenuCategory {
+  id          String   @id @default(uuid())
+  branchId    String   @map("branch_id")
+  name        String
+  description String   @default("")
+  sortOrder   Int      @default(0) @map("sort_order")
+  isActive    Boolean  @default(true) @map("is_active")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  branch Branch     @relation(fields: [branchId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  items  MenuItem[]
+
+  @@unique([branchId, name])
+  @@index([branchId, isActive, sortOrder])
+  @@map("menu_categories")
+}
+
+model MenuItem {
+  id          String      @id @default(uuid())
+  categoryId  String      @map("category_id")
+  name        String
+  description String      @default("")
+  priceCents  Int         @map("price_cents")
+  station     MenuStation @default(KITCHEN)
+  isAvailable Boolean     @default(true) @map("is_available")
+  sortOrder   Int         @default(0) @map("sort_order")
+  createdAt   DateTime    @default(now()) @map("created_at")
+  updatedAt   DateTime    @updatedAt @map("updated_at")
+
+  /// Restrict keeps a category delete from removing dishes, and from touching ticket history through them.
+  category       MenuCategory            @relation(fields: [categoryId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  items          OrderItem[]
+  modifierGroups MenuItemModifierGroup[]
+
+  @@index([categoryId, isAvailable, sortOrder])
+  @@map("menu_items")
+}
+
+model Order {
+  id                 String         @id
+  branchId           String         @map("branch_id")
+  type               OrderType
+  status             OrderStatus    @default(OPEN)
+  progress           DiningProgress @default(SEATED)
+  source             OrderSource    @default(POS)
+  tableId            String?        @map("table_id")
+  serverId           String?        @map("server_id")
+  guestName          String         @default("") @map("guest_name")
+  guestPhone         String         @default("") @map("guest_phone")
+  guestCount         Int            @default(1) @map("guest_count")
+  deliveryAddress    String         @default("") @map("delivery_address")
+  notes              String         @default("")
+  currency           String         @default("USD")
+  subtotalCents      Int            @default(0) @map("subtotal_cents")
+  discountKind       DiscountKind   @default(NONE) @map("discount_kind")
+  discountValue      Int            @default(0) @map("discount_value")
+  discountCents      Int            @default(0) @map("discount_cents")
+  discountLabel      String         @default("") @map("discount_label")
+  serviceChargeCents Int            @default(0) @map("service_charge_cents")
+  totalCents         Int            @default(0) @map("total_cents")
+  mergedIntoId       String?        @map("merged_into_id")
+  splitFromId        String?        @map("split_from_id")
+  closedAt           DateTime?      @map("closed_at")
+  createdAt          DateTime       @default(now()) @map("created_at")
+  updatedAt          DateTime       @updatedAt @map("updated_at")
+
+  branch Branch       @relation(fields: [branchId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  table  DiningTable? @relation(fields: [tableId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  server User?        @relation("ServerOrders", fields: [serverId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  items    OrderItem[]
+  payments Payment[]
+  refunds  Refund[]
+
+  @@index([branchId, status])
+  @@index([branchId, closedAt])
+  @@index([tableId])
+  @@index([updatedAt])
+  @@map("orders")
+}
+
+model OrderItem {
+  id             String      @id
+  orderId        String      @map("order_id")
+  menuItemId     String?     @map("menu_item_id")
+  name           String
+  unitPriceCents Int         @map("unit_price_cents")
+  quantity       Int
+  notes          String      @default("")
+  station        MenuStation @default(KITCHEN)
+  voided         Boolean     @default(false)
+  sentAt         DateTime?   @map("sent_at")
+  firedQuantity  Int         @default(0) @map("fired_quantity")
+  createdAt      DateTime    @default(now()) @map("created_at")
+  updatedAt      DateTime    @updatedAt @map("updated_at")
+
+  order     Order               @relation(fields: [orderId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  menuItem  MenuItem?           @relation(fields: [menuItemId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  modifiers OrderItemModifier[]
+
+  @@index([orderId])
+  @@map("order_items")
+}
+
+model Payment {
+  id            String        @id
+  orderId       String        @map("order_id")
+  method        PaymentMethod
+  amountCents   Int           @map("amount_cents")
+  tenderedCents Int           @map("tendered_cents")
+  changeCents   Int           @default(0) @map("change_cents")
+  note          String        @default("")
+  cashierId     String?       @map("cashier_id")
+  createdAt     DateTime      @default(now()) @map("created_at")
+
+  order   Order @relation(fields: [orderId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  cashier User? @relation("CashierPayments", fields: [cashierId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+
+  @@index([orderId])
+  @@index([createdAt])
+  @@map("payments")
+}
+
+model Refund {
+  id          String        @id
+  orderId     String        @map("order_id")
+  method      PaymentMethod
+  amountCents Int           @map("amount_cents")
+  reason      String
+  cashierId   String?       @map("cashier_id")
+  createdAt   DateTime      @default(now()) @map("created_at")
+
+  order   Order @relation(fields: [orderId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  cashier User? @relation("CashierRefunds", fields: [cashierId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+
+  @@index([orderId])
+  @@index([createdAt])
+  @@map("refunds")
+}
+
+model QrToken {
+  id        String   @id @default(uuid())
+  branchId  String   @map("branch_id")
+  tableId   String   @map("table_id")
+  token     String   @unique
+  isActive  Boolean  @default(true) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  branch Branch      @relation(fields: [branchId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  table  DiningTable @relation(fields: [tableId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+
+  @@index([tableId])
+  @@map("qr_tokens")
+}
+
+model Tombstone {
+  id        String   @id @default(uuid())
+  branchId  String   @map("branch_id")
+  entity    String
+  entityId  String   @map("entity_id")
+  deletedAt DateTime @default(now()) @map("deleted_at")
+
+  branch Branch @relation(fields: [branchId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+
+  @@index([branchId, deletedAt])
+  @@map("tombstones")
+}
+
+model ModifierGroup {
+  id               String  @id @default(uuid())
+  branchId         String  @map("branch_id")
+  name             String
+  description      String  @default("")
+  isRequired       Boolean @default(false) @map("is_required")
+  minSelections    Int     @default(0) @map("min_selections")
+  maxSelections    Int     @default(1) @map("max_selections")
+  isMultipleSelect Boolean @default(false) @map("is_multiple_select")
+  sortOrder        Int     @default(0) @map("sort_order")
+  isActive         Boolean @default(true) @map("is_active")
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+
+  branch     Branch                  @relation(fields: [branchId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  options    ModifierOption[]
+  menuItems  MenuItemModifierGroup[]
+
+  @@unique([branchId, name])
+  @@index([branchId, isActive, sortOrder])
+  @@map("modifier_groups")
+}
+
+model ModifierOption {
+  id              String  @id @default(uuid())
+  modifierGroupId String  @map("modifier_group_id")
+  name            String
+  description     String  @default("")
+  priceCents      Int     @default(0) @map("price_cents")
+  sortOrder       Int     @default(0) @map("sort_order")
+  isActive        Boolean @default(true) @map("is_active")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  modifierGroup ModifierGroup       @relation(fields: [modifierGroupId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  orderItems    OrderItemModifier[]
+
+  @@unique([modifierGroupId, name])
+  @@index([modifierGroupId, isActive, sortOrder])
+  @@map("modifier_options")
+}
+
+model MenuItemModifierGroup {
+  id              String @id @default(uuid())
+  menuItemId      String @map("menu_item_id")
+  modifierGroupId String @map("modifier_group_id")
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  menuItem      MenuItem      @relation(fields: [menuItemId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  modifierGroup ModifierGroup @relation(fields: [modifierGroupId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+
+  @@unique([menuItemId, modifierGroupId])
+  @@map("menu_item_modifier_groups")
+}
+
+model OrderItemModifier {
+  id               String @id @default(uuid())
+  orderItemId      String @map("order_item_id")
+  modifierGroupId  String @map("modifier_group_id")
+  modifierOptionId String @map("modifier_option_id")
+  modifierName     String @map("modifier_name")
+  priceCents       Int    @map("price_cents")
+  createdAt        DateTime @default(now()) @map("created_at")
+
+  orderItem      OrderItem      @relation(fields: [orderItemId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  modifierOption ModifierOption @relation(fields: [modifierOptionId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+
+  @@index([orderItemId])
+  @@map("order_item_modifiers")
+}
