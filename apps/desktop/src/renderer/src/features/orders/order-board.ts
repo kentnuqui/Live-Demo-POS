@@ -16,6 +16,14 @@ export function boardStatusClass(order: OrderDto): string {
   return 'bg-muted text-muted-foreground'
 }
 
+/** How a check is named in a sentence, for confirmations and toasts. */
+export function orderTitle(order: Pick<OrderDto, 'ticketNumber' | 'tableLabel' | 'guestName'>): string {
+  if (order.ticketNumber) return `Order #${order.ticketNumber}`
+  if (order.tableLabel) return `The order for Table ${order.tableLabel}`
+  if (order.guestName.trim()) return `The order for ${order.guestName.trim()}`
+  return 'This order'
+}
+
 /** Formats a timestamp in the branch timezone. An empty zone stays blank rather than using the browser clock. */
 export function formatBoardTime(iso: string, timeZone: string | undefined, withDate: boolean): string {
   if (!timeZone) return ''

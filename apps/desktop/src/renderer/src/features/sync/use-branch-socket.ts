@@ -33,6 +33,9 @@ export function useBranchSocket(branchId: string | null): void {
     socket.on('order.sent', refreshOrderEvent)
     socket.on('order.items.added', refreshOrderEvent)
     socket.on('order.items.cancelled', refreshOrderEvent)
+    socket.on('order.cancelled', () => {
+      void queryClient.invalidateQueries({ queryKey: ['kitchen', branchId] })
+    })
     socket.on('reservation.updated', () => {
       refreshFloor()
       void queryClient.invalidateQueries({ queryKey: ['reservations', branchId] })

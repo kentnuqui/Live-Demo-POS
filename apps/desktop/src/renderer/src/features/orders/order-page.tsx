@@ -395,7 +395,7 @@ export function OrderPage() {
           <div className="min-w-0">
             <div className="truncate font-serif text-3xl leading-none">{checkHeading(current)}</div>
             <div className="mt-1 truncate text-xs uppercase tracking-[0.16em] text-muted-foreground">
-              {labelFor(current.type)} · {orderServiceLabel(current)}
+              {labelFor(current.type)} · {current.status === 'CANCELLED' ? 'Cancelled' : orderServiceLabel(current)}
             </div>
           </div>
           <Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search the menu" className="ml-auto min-w-36 max-w-xs" />

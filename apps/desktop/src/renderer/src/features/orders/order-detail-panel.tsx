@@ -1,4 +1,4 @@
-import { formatMoney, ORDER_TYPE_LABEL, PAYMENT_METHOD_LABEL, type OrderDto } from '@towns/shared'
+import { formatMoney, OPEN_ORDER_STATUSES, ORDER_TYPE_LABEL, orderCancelBlock, PAYMENT_METHOD_LABEL, type OrderDto } from '@towns/shared'
 import { X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { DialogTitle } from '@/components/ui/dialog'
@@ -17,9 +17,12 @@ interface OrderDetailPanelProps {
   onOpen: () => void
   onClose?: () => void
   onRetry: () => void
+  /** Present when this person may start a cancel. Approval is checked in the dialog and on the server. */
+  onCancel?: () => void
+  offline?: boolean
 }
 
-/** Read-only check. Changes still happen on the existing order screen. */
+/** Read-only check. Changes still happen on the existing order screen, except cancelling. */
 export function OrderDetailPanel({
   order,
   loading,
@@ -30,7 +33,9 @@ export function OrderDetailPanel({
   className,
   onOpen,
   onClose,
-  onRetry
+  onRetry,
+  onCancel,
+  offline
 }: OrderDetailPanelProps) {
   if (loading) {
     return (
@@ -59,6 +64,8 @@ export function OrderDetailPanel({
   const when = order.closedAt ?? order.createdAt
   const title = order.ticketNumber ? `Order #${order.ticketNumber}` : 'Order'
   const Heading = asDialog ? DialogTitle : 'h2'
+  const active = OPEN_ORDER_STATUSES.includes(order.status)
+  const cancelBlock = orderCancelBlock(order)
 
   return (
     <div className={cn('flex min-h-0 flex-col overflow-hidden', className)}>
@@ -93,6 +100,16 @@ export function OrderDetailPanel({
         </dl>
 
         {order.notes.trim() ? <p className="mt-4 text-sm text-muted-foreground">Note: {order.notes.trim()}</p> : null}
+
+        {order.cancellation ? (
+          <dl className="mt-5 space-y-3 border-t pt-4 text-sm">
+            <p className="text-xs uppercase tracking-[0.14em] text-muted-foreground">Cancellation</p>
+            <Fact label="Cancelled at" value={formatBoardTime(order.cancellation.at, timeZone, true) || '—'} />
+            <Fact label="Cancelled by" value={order.cancellation.byName ?? 'Staff'} />
+            {order.cancellation.approvedByName ? <Fact label="Approved by" value={order.cancellation.approvedByName} /> : null}
+            <Fact label="Reason" value={order.cancellation.reason || '—'} />
+          </dl>
+        ) : null}
 
         <div className="mt-5 space-y-4 border-t pt-4">
           {order.items.length === 0 ? <p className="text-sm text-muted-foreground">No items on this check.</p> : null}
@@ -173,10 +190,19 @@ export function OrderDetailPanel({
           </div>
         ) : null}
       </div>
-      <div className="shrink-0 border-t p-4">
+      <div className="shrink-0 space-y-2 border-t p-4">
         <Button className="w-full" onClick={onOpen}>
           Open check
         </Button>
+        {onCancel && active && !cancelBlock ? (
+          <>
+            <Button variant="outline" className="w-full text-accent" disabled={offline} onClick={onCancel}>
+              Cancel order
+            </Button>
+            {offline ? <p className="text-center text-xs text-muted-foreground">Cancelling an order needs a connection.</p> : null}
+          </>
+        ) : null}
+        {onCancel && active && cancelBlock ? <p className="text-xs text-muted-foreground">{cancelBlock}</p> : null}
       </div>
     </div>
   )

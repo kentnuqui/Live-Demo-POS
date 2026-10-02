@@ -67,7 +67,7 @@ export async function staffName(tx: Tx, actorId?: string | null): Promise<string
 export async function recordOrderEvent(
   tx: Tx,
   order: { id: string; branchId: string },
-  kind: 'ITEMS_ADDED' | 'ITEMS_SENT' | 'ITEMS_CANCELLED',
+  kind: 'ITEMS_ADDED' | 'ITEMS_SENT' | 'ITEMS_CANCELLED' | 'ORDER_CANCELLED',
   actorId: string | null | undefined,
   summary: string
 ): Promise<void> {

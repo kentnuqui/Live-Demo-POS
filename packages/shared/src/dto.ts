@@ -281,6 +281,21 @@ export interface OrderDto {
   closedAt: string | null
   /** Present when this check was charged to an account. */
   ar: ArSaleStamp | null
+  /** Present when a person cancelled the check. A merged-away check has none. */
+  cancellation: OrderCancellationStamp | null
+}
+
+export interface OrderCancellationStamp {
+  at: string
+  byName: string | null
+  approvedByName: string | null
+  reason: string
+}
+
+export interface CancelOrderResultDto {
+  order: OrderDto
+  /** The table after it was recalculated. Null for checks without a table. */
+  table: { id: string; label: string; status: TableStatus } | null
 }
 
 export interface ArSaleStamp {

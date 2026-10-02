@@ -115,6 +115,7 @@ api.post('/orders/:orderId/pay', requirePermission('orders.bill'), orders.pay)
 api.post('/orders/:orderId/pay-split', requirePermission('orders.bill'), orders.paySplit)
 api.post('/orders/:orderId/refund', requirePermission('orders.bill'), orders.refund)
 api.post('/orders/:orderId/finish', requirePermission('orders.bill'), orders.finish)
+api.post('/orders/:orderId/cancel', requirePermission('orders.write'), orders.cancel)
 
 api.post('/sync/push', requirePermission('orders.read'), sync.push)
 api.get('/sync/pull', requirePermission('orders.read'), sync.pull)

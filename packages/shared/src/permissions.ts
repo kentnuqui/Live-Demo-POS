@@ -8,6 +8,7 @@ export const PERMISSIONS = [
   'orders.write',
   'orders.bill',
   'orders.kitchen',
+  'orders.cancel',
   'kitchen.display',
   'orders.read',
   'reservations.write',
@@ -32,6 +33,8 @@ const GRANTS: Record<Permission, readonly UserRole[]> = {
   'orders.write': ['SUPER_ADMIN', 'ADMIN', 'RESTAURANT_MANAGER', 'CASHIER', 'WAITER'],
   'orders.bill': ['SUPER_ADMIN', 'ADMIN', 'RESTAURANT_MANAGER', 'CASHIER'],
   'orders.kitchen': ['SUPER_ADMIN', 'ADMIN', 'RESTAURANT_MANAGER', 'KITCHEN_STAFF', 'BARTENDER'],
+  /** Everyone else with orders.write cancels with a manager PIN. */
+  'orders.cancel': ['SUPER_ADMIN', 'ADMIN', 'RESTAURANT_MANAGER'],
   'kitchen.display': ['RESTAURANT_MANAGER', 'KITCHEN_STAFF'],
   'orders.read': [
     'SUPER_ADMIN',

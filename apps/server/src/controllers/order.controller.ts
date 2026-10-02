@@ -3,6 +3,7 @@ import { z } from 'zod'
 import {
   addItemsSchema,
   canAccessBranch,
+  cancelOrderSchema,
   discountSchema,
   mergeSchema,
   orderCreateSchema,
@@ -20,6 +21,7 @@ import { AppError } from '../lib/app-error.js'
 import { asyncHandler } from '../lib/async-handler.js'
 import { ok } from '../lib/response.js'
 import * as actions from '../services/order-actions.service.js'
+import * as cancellation from '../services/order-cancel.service.js'
 import * as orderList from '../services/order-list.service.js'
 import * as orders from '../services/order.service.js'
 
@@ -136,4 +138,9 @@ export const refund = asyncHandler(async (req, res) => {
 export const finish = asyncHandler(async (req, res) => {
   await guard(req, req.params.orderId)
   ok(res, await actions.finishOrder(req.params.orderId))
+})
+
+export const cancel = asyncHandler(async (req, res) => {
+  await guard(req, req.params.orderId)
+  ok(res, await cancellation.cancelOrder(req.user!, req.params.orderId, cancelOrderSchema.parse(req.body)))
 })

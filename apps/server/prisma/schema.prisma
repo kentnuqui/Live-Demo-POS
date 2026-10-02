@@ -292,6 +292,8 @@ model User {
   branch        Branch?        @relation(fields: [branchId], references: [id], onDelete: SetNull, onUpdate: Cascade)
   refreshTokens RefreshToken[]
   orders           Order[]        @relation("ServerOrders")
+  ordersCancelled  Order[]        @relation("OrderCancelledBy")
+  cancelApprovals  Order[]        @relation("OrderCancelApprovedBy")
   payments         Payment[]      @relation("CashierPayments")
   refunds          Refund[]       @relation("CashierRefunds")
   arAccountsOpened ArAccount[]    @relation("ArAccountCreatedBy")
@@ -541,12 +543,19 @@ model Order {
   kitchenCompletedAt DateTime?      @map("kitchen_completed_at")
   /// Stable pass number, assigned the first time the check is fired.
   ticketNumber       Int?           @map("ticket_number")
+  /// Set once, when a person cancels the check. The row and its items stay for history.
+  cancelledAt        DateTime?      @map("cancelled_at")
+  cancelledById      String?        @map("cancelled_by_id")
+  cancelApprovedById String?        @map("cancel_approved_by_id")
+  cancelReason       String         @default("") @map("cancel_reason")
   createdAt          DateTime       @default(now()) @map("created_at")
   updatedAt          DateTime       @updatedAt @map("updated_at")
 
-  branch Branch       @relation(fields: [branchId], references: [id], onDelete: Cascade, onUpdate: Cascade)
-  table  DiningTable? @relation(fields: [tableId], references: [id], onDelete: SetNull, onUpdate: Cascade)
-  server User?        @relation("ServerOrders", fields: [serverId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  branch           Branch       @relation(fields: [branchId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  table            DiningTable? @relation(fields: [tableId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  server           User?        @relation("ServerOrders", fields: [serverId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  cancelledBy      User?        @relation("OrderCancelledBy", fields: [cancelledById], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  cancelApprovedBy User?        @relation("OrderCancelApprovedBy", fields: [cancelApprovedById], references: [id], onDelete: SetNull, onUpdate: Cascade)
   items     OrderItem[]
   payments  Payment[]
   refunds   Refund[]

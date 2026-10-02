@@ -49,7 +49,6 @@ function KitchenPage() {
   const signOut = useSession((state) => state.signOut)
   const navigate = useNavigate()
   const queryClient = useQueryClient()
-  const live = useKitchenSocket(branchId)
   const now = useClock()
   const [view, setView] = useState<'active' | 'done'>('active')
   const [busy, setBusy] = useState<ReadonlySet<string>>(new Set())
@@ -59,6 +58,11 @@ function KitchenPage() {
   const inflight = useRef(new Set<string>())
   const known = useRef(new Set<string>())
   const noticeTimer = useRef<number | null>(null)
+  const live = useKitchenSocket(branchId, (ticketNumber) => {
+    setNotice(ticketNumber ? `Order #${ticketNumber} cancelled` : 'An order was cancelled')
+    if (noticeTimer.current) window.clearTimeout(noticeTimer.current)
+    noticeTimer.current = window.setTimeout(() => setNotice(null), 8000)
+  })
 
   const profile = useQuery({ queryKey: ['profile'], queryFn: api.profile })
   const board = useQuery({
@@ -362,10 +366,12 @@ function useClock(): number {
 }
 
 /** Keeps the current tickets on screen if the socket drops, and refetches when it returns. */
-function useKitchenSocket(branchId: string | null): boolean {
+function useKitchenSocket(branchId: string | null, onCancelled: (ticketNumber: number | null) => void): boolean {
   const token = useSession((state) => state.accessToken)
   const queryClient = useQueryClient()
   const [live, setLive] = useState(true)
+  const cancelledRef = useRef(onCancelled)
+  cancelledRef.current = onCancelled
 
   useEffect(() => {
     if (!branchId || !token) {
@@ -392,6 +398,10 @@ function useKitchenSocket(branchId: string | null): boolean {
     socket.on('order.sent', refresh)
     socket.on('order.items.added', refresh)
     socket.on('order.items.cancelled', refresh)
+    socket.on('order.cancelled', (payload: { ticketNumber?: number | null; kitchen?: boolean }) => {
+      refresh()
+      if (payload?.kitchen) cancelledRef.current(payload.ticketNumber ?? null)
+    })
     socket.on('sync.applied', refresh)
     return () => {
       socket.removeAllListeners()

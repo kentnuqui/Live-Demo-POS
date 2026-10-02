@@ -3,6 +3,8 @@ import type {
   BranchDto,
   BranchSettingsDto,
   BranchSettingsInput,
+  CancelOrderInput,
+  CancelOrderResultDto,
   DailyReportDto,
   DiscountInput,
   FloorPlanDto,
@@ -282,6 +284,8 @@ export const api = {
   refund: (orderId: string, body: RefundInput) =>
     request<OrderDto>(`/api/orders/${orderId}/refund`, { method: 'POST', body: JSON.stringify(body) }),
   finish: (orderId: string) => request<OrderDto>(`/api/orders/${orderId}/finish`, { method: 'POST', body: '{}' }),
+  cancelOrder: (orderId: string, body: CancelOrderInput) =>
+    request<CancelOrderResultDto>(`/api/orders/${orderId}/cancel`, { method: 'POST', body: JSON.stringify(body) }),
   dailyReport: (branchId: string, day?: string) =>
     request<DailyReportDto>(`/api/branches/${branchId}/reports/daily${day ? `?day=${day}` : ''}`),
   arSummary: (branchId: string) => request<ArSummaryDto>(`/api/branches/${branchId}/ar/summary`),

@@ -21,7 +21,9 @@ export const orderInclude = {
     }
   },
   table: { select: { id: true, label: true } },
-  server: { select: { id: true, firstName: true, lastName: true } }
+  server: { select: { id: true, firstName: true, lastName: true } },
+  cancelledBy: { select: { firstName: true, lastName: true } },
+  cancelApprovedBy: { select: { firstName: true, lastName: true } }
 } satisfies Prisma.OrderInclude
 
 export type OrderRow = Prisma.OrderGetPayload<{ include: typeof orderInclude }>

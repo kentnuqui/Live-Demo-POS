@@ -45,6 +45,13 @@ type OrderWithRelations = Order & {
     status: 'OPEN' | 'PARTIALLY_PAID' | 'PAID' | 'OVERDUE' | 'VOIDED' | 'WRITTEN_OFF'
     account: { companyName: string; customerName: string }
   } | null
+  cancelledBy?: Pick<User, 'firstName' | 'lastName'> | null
+  cancelApprovedBy?: Pick<User, 'firstName' | 'lastName'> | null
+}
+
+function personName(user: Pick<User, 'firstName' | 'lastName'> | null | undefined): string | null {
+  if (!user) return null
+  return `${user.firstName} ${user.lastName}`.trim() || null
 }
 
 export function toUserDto(user: User): UserDto {
@@ -218,6 +225,14 @@ export function toOrderDto(order: OrderWithRelations): OrderDto {
           dueOn: order.arInvoice.dueOn,
           termsLabel: termsLabel(order.arInvoice.terms, order.arInvoice.termDays),
           status: order.arInvoice.status
+        }
+      : null,
+    cancellation: order.cancelledAt
+      ? {
+          at: order.cancelledAt.toISOString(),
+          byName: personName(order.cancelledBy),
+          approvedByName: personName(order.cancelApprovedBy),
+          reason: order.cancelReason
         }
       : null
   }

@@ -1,5 +1,6 @@
-import { keepPreviousData, useQuery } from '@tanstack/react-query'
+import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
+  cancelSuccessMessage,
   formatMoney,
   hasPermission,
   ORDER_TYPES,
@@ -18,7 +19,10 @@ import { useWide } from '@/lib/use-wide'
 import { cn } from '@/lib/utils'
 import { cached } from '@/features/sync/cache'
 import { useSession } from '@/stores/session-store'
-import { boardStatusClass, boardStatusLabel, formatBoardTime } from './order-board'
+import { useToasts } from '@/stores/toast-store'
+import { useUi } from '@/stores/ui-store'
+import { CancelOrderDialog } from './cancel-order-dialog'
+import { boardStatusClass, boardStatusLabel, formatBoardTime, orderTitle } from './order-board'
 import { OrderDetailPanel } from './order-detail-panel'
 
 type Scope = OrderListQuery['scope']
@@ -53,8 +57,11 @@ export function OrdersPage() {
   const branchId = useSession((state) => state.activeBranchId)
   const user = useSession((state) => state.user)
   const navigate = useNavigate()
+  const queryClient = useQueryClient()
   const wide = useWide()
+  const offline = useUi((state) => state.connection) === 'offline'
   const canWrite = !!user && hasPermission(user.role, 'orders.write')
+  const [cancelOpen, setCancelOpen] = useState(false)
 
   const [scope, setScope] = useState<Scope>('active')
   const [focus, setFocus] = useState<Focus>('all')
@@ -80,6 +87,10 @@ export function OrdersPage() {
   useEffect(() => {
     setSelectedId(null)
   }, [branchId])
+
+  useEffect(() => {
+    setCancelOpen(false)
+  }, [selectedId])
 
   const customReady = range !== 'custom' || (!!from && !!to)
   const query = useMemo<OrderListQuery>(
@@ -167,21 +178,41 @@ export function OrdersPage() {
     setDebounced('')
   }
 
+  const closeCancelled = (message: string) => {
+    setCancelOpen(false)
+    setSelectedId(null)
+    useToasts.getState().push(message)
+  }
+
   const detailPanel = (
-    <OrderDetailPanel
-      order={shown}
-      loading={!!selectedId && !shown && detail.isLoading}
-      failed={!!selectedId && !shown && detail.isError}
-      timeZone={timeZone}
-      serviceLabel={settings.data?.serviceChargeLabel ?? 'Service'}
-      asDialog={!wide}
-      onOpen={() => {
-        if (selectedId) navigate(`/orders/${selectedId}`)
-      }}
-      onClose={wide ? () => setSelectedId(null) : undefined}
-      onRetry={() => void detail.refetch()}
-      className="h-full min-h-0"
-    />
+    <>
+      <OrderDetailPanel
+        order={shown}
+        loading={!!selectedId && !shown && detail.isLoading}
+        failed={!!selectedId && !shown && detail.isError}
+        timeZone={timeZone}
+        serviceLabel={settings.data?.serviceChargeLabel ?? 'Service'}
+        asDialog={!wide}
+        onOpen={() => {
+          if (selectedId) navigate(`/orders/${selectedId}`)
+        }}
+        onClose={wide ? () => setSelectedId(null) : undefined}
+        onRetry={() => void detail.refetch()}
+        onCancel={canWrite ? () => setCancelOpen(true) : undefined}
+        offline={offline}
+        className="h-full min-h-0"
+      />
+      <CancelOrderDialog
+        order={shown}
+        open={cancelOpen && !!shown}
+        onOpenChange={setCancelOpen}
+        onCancelled={(result) => closeCancelled(cancelSuccessMessage(orderTitle(result.order), result.table))}
+        onAlreadyCancelled={(message) => {
+          void queryClient.invalidateQueries({ queryKey: ['orders', branchId] })
+          closeCancelled(message)
+        }}
+      />
+    </>
   )
 
   return (

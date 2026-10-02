@@ -16,6 +16,7 @@ import {
   TABLE_ZONES,
   USER_ROLES
 } from './enums.js'
+import { CANCEL_REASONS } from './order-cancel.js'
 
 const uuid = z.string().uuid()
 
@@ -231,6 +232,18 @@ export const splitPaySchema = z.object({
   payments: z.array(paymentSchema).min(1).max(12)
 })
 
+export const cancelOrderSchema = z
+  .object({
+    reason: z.enum(CANCEL_REASONS),
+    note: z.string().trim().max(120).optional(),
+    overridePin: z.string().regex(/^\d{4,6}$/).optional()
+  })
+  .superRefine((input, ctx) => {
+    if (input.reason === 'OTHER' && !input.note) {
+      ctx.addIssue({ code: 'custom', message: 'Add a short explanation', path: ['note'] })
+    }
+  })
+
 export const refundSchema = z.object({
   id: uuid,
   method: z.enum(PAYMENT_METHODS),
@@ -376,6 +389,7 @@ export type DiscountInput = z.infer<typeof discountSchema>
 export type PaymentInput = z.infer<typeof paymentSchema>
 export type SplitPayInput = z.infer<typeof splitPaySchema>
 export type RefundInput = z.infer<typeof refundSchema>
+export type CancelOrderInput = z.infer<typeof cancelOrderSchema>
 export type CategoryCreateInput = z.infer<typeof categoryCreateSchema>
 export type CategoryUpdateInput = z.infer<typeof categoryUpdateSchema>
 export type MenuItemCreateInput = z.infer<typeof menuItemCreateSchema>
