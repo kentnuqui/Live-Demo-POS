@@ -12,7 +12,7 @@
     "db:push": "prisma db push --skip-generate",
     "db:seed": "tsx prisma/seed.ts",
     "db:setup": "npm run db:generate && npm run db:push && npm run db:seed",
-    "db:deploy": "prisma db push --skip-generate && tsx prisma/seed.ts",
+    "db:deploy": "prisma db execute --file prisma/prepare-ticket-unique.sql --schema prisma/schema.prisma && prisma db push --skip-generate --accept-data-loss && tsx prisma/seed.ts",
     "boot": "node scripts/boot.mjs"
   },
   "dependencies": {
