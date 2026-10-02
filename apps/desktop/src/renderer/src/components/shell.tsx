@@ -1,5 +1,5 @@
 import { hasPermission, type Permission } from '@towns/shared'
-import { BarChart3, ClipboardList, LayoutGrid, Moon, Settings, Sun, Users, UtensilsCrossed, Wrench } from 'lucide-react'
+import { BarChart3, ChefHat, ClipboardList, LayoutDashboard, LayoutGrid, Moon, Settings, Sun, Users, UtensilsCrossed, Wallet, Wrench } from 'lucide-react'
 import { NavLink, Navigate, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { useEffect } from 'react'
 import { useQuery } from '@tanstack/react-query'
@@ -12,9 +12,12 @@ import { useSession } from '@/stores/session-store'
 import { useUi } from '@/stores/ui-store'
 
 const LINKS: Array<{ to: string; label: string; icon: typeof LayoutGrid; permission?: Permission }> = [
+  { to: '/dashboard', label: 'Overview', icon: LayoutDashboard },
   { to: '/floor', label: 'Tables', icon: LayoutGrid, permission: 'orders.read' },
   { to: '/orders', label: 'Orders', icon: ClipboardList, permission: 'orders.read' },
+  { to: '/kitchen', label: 'Kitchen', icon: ChefHat, permission: 'kitchen.display' },
   { to: '/reports', label: 'Sales', icon: BarChart3, permission: 'orders.bill' },
+  { to: '/ar', label: 'Accounts', icon: Wallet, permission: 'ar.view' },
   { to: '/reservations', label: 'Book', icon: Users, permission: 'orders.read' },
   { to: '/menu', label: 'Menu', icon: UtensilsCrossed, permission: 'settings.manage' },
   { to: '/modifiers', label: 'Modifiers', icon: Wrench, permission: 'settings.manage' },
@@ -46,7 +49,7 @@ export function Shell() {
   useEffect(() => {
     function onKey(event: KeyboardEvent) {
       if (!(event.altKey || event.metaKey) || event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) return
-      const map: Record<string, string> = { '1': '/floor', '2': '/orders', '3': '/reservations', '4': '/reports' }
+      const map: Record<string, string> = { '1': '/floor', '2': '/orders', '3': '/reservations', '4': '/reports', '5': '/dashboard' }
       const path = map[event.key]
       const link = LINKS.find((item) => item.to === path)
       if (!path || !link || !user || !canOpenPage(user.role, path)) return
@@ -63,9 +66,8 @@ export function Shell() {
   return (
     <div className="flex h-full">
       {zen ? null : (
-        <nav className="flex w-[92px] shrink-0 flex-col items-center border-r bg-card py-4">
-          <div className="font-serif text-2xl">T</div>
-          <div className="mt-6 flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto">
+        <nav className="flex w-[92px] shrink-0 flex-col items-center border-r bg-card py-3">
+          <div className="flex min-h-0 flex-1 flex-col gap-1.5 overflow-y-auto">
             {LINKS.filter((link) => user && canOpenPage(user.role, link.to) && (!link.permission || hasPermission(user.role, link.permission))).map((link) => (
               <NavLink
                 key={link.to}
@@ -101,7 +103,18 @@ export function Shell() {
             </select>
           ) : null}
           <div className="ml-auto flex items-center gap-3 text-sm text-muted-foreground">
-            <span>
+            <span
+              className={cn(
+                'inline-flex items-center gap-2 rounded-full px-2.5 py-1 text-xs',
+                connection === 'offline' ? 'bg-accent/10 text-accent' : 'bg-muted'
+              )}
+            >
+              <span
+                className={cn(
+                  'h-1.5 w-1.5 rounded-full',
+                  connection === 'offline' ? 'bg-accent' : connection === 'syncing' ? 'bg-foreground/40' : 'bg-[#2f6f4e]'
+                )}
+              />
               {connection === 'offline' ? 'Emergency mode' : connection === 'syncing' ? 'Syncing' : 'Live'}
               {outbox ? ` · ${outbox} waiting` : ''}
             </span>

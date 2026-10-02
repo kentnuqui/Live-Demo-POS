@@ -56,11 +56,14 @@ export function ReportsPage() {
           <p className="mt-2 text-sm text-muted-foreground">
             {data.transactionCount === 0 ? 'No checks closed on this day.' : `${data.transactionCount} checks closed.`}
           </p>
-          <div className="mt-6 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          <div className="mt-6 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
             <Stat label="Net sales" value={formatMoney(data.netCents, currency)} emphasis />
             <Stat label="Sales" value={formatMoney(data.salesCents, currency)} />
             <Stat label="Discounts" value={formatMoney(data.discountCents, currency)} />
             <Stat label="Refunds" value={formatMoney(data.refundCents, currency)} detail={data.refundCount ? `${data.refundCount} refunds` : undefined} />
+            <Stat label="Account sales" value={formatMoney(data.arSalesCents, currency)} detail="Not in the drawer" />
+            <Stat label="Account collections" value={formatMoney(data.arCollectionsCents, currency)} detail="Paid on existing balances" />
+            <Stat label="Cash drawer" value={formatMoney(data.cashDrawerCents, currency)} detail="Cash sales, cash collected on account, minus cash refunds" />
           </div>
           <div className="mt-3 grid gap-3 sm:grid-cols-3">
             <Stat label="Transactions" value={String(data.transactionCount)} />

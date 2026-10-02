@@ -15,6 +15,11 @@ export const orderInclude = {
   },
   payments: { orderBy: { createdAt: 'asc' as const } },
   refunds: { orderBy: { createdAt: 'asc' as const } },
+  arInvoice: {
+    include: {
+      account: { select: { companyName: true, customerName: true } }
+    }
+  },
   table: { select: { id: true, label: true } },
   server: { select: { id: true, firstName: true, lastName: true } }
 } satisfies Prisma.OrderInclude

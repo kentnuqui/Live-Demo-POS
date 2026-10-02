@@ -9,7 +9,10 @@ import {
   orderPatchSchema,
   paymentSchema,
   progressSchema,
+  splitPaySchema,
+  orderListQuerySchema,
   refundSchema,
+  sendOrderSchema,
   splitSchema,
   transferSchema
 } from '@towns/shared'
@@ -17,6 +20,7 @@ import { AppError } from '../lib/app-error.js'
 import { asyncHandler } from '../lib/async-handler.js'
 import { ok } from '../lib/response.js'
 import * as actions from '../services/order-actions.service.js'
+import * as orderList from '../services/order-list.service.js'
 import * as orders from '../services/order.service.js'
 
 async function guard(req: Request, orderId: string) {
@@ -27,7 +31,13 @@ async function guard(req: Request, orderId: string) {
   return order
 }
 
+const BOARD_KEYS = ['scope', 'focus', 'range', 'from', 'to', 'q', 'page', 'pageSize'] as const
+
 export const list = asyncHandler(async (req, res) => {
+  if (BOARD_KEYS.some((key) => req.query[key] !== undefined)) {
+    ok(res, await orderList.queryOrders(req.params.branchId, orderListQuerySchema.parse(req.query)))
+    return
+  }
   const status = typeof req.query.status === 'string' ? req.query.status : undefined
   const type = typeof req.query.type === 'string' ? req.query.type : undefined
   ok(res, await orders.listOrders(req.params.branchId, status, type))
@@ -48,23 +58,28 @@ export const patch = asyncHandler(async (req, res) => {
 
 export const addItems = asyncHandler(async (req, res) => {
   await guard(req, req.params.orderId)
-  ok(res, await orders.addItems(req.params.orderId, addItemsSchema.parse(req.body)))
+  ok(res, await orders.addItems(req.params.orderId, addItemsSchema.parse(req.body), { actorId: req.user?.id }))
 })
 
 export const voidItem = asyncHandler(async (req, res) => {
   await guard(req, req.params.orderId)
-  ok(res, await orders.voidItem(req.params.orderId, req.params.itemId))
+  const body = z.object({ confirmCancel: z.boolean().optional() }).parse(req.body ?? {})
+  ok(res, await orders.voidItem(req.params.orderId, req.params.itemId, { actorId: req.user?.id, confirmCancel: body.confirmCancel }))
 })
 
 export const adjustItem = asyncHandler(async (req, res) => {
   await guard(req, req.params.orderId)
-  const body = z.object({ delta: z.number().int().min(-99).max(99) }).parse(req.body)
-  ok(res, await orders.adjustItemQuantity(req.params.orderId, req.params.itemId, body.delta))
+  const body = z.object({ delta: z.number().int().min(-99).max(99), confirmCancel: z.boolean().optional() }).parse(req.body)
+  ok(res, await orders.adjustItemQuantity(req.params.orderId, req.params.itemId, body.delta, {
+    actorId: req.user?.id,
+    confirmCancel: body.confirmCancel
+  }))
 })
 
 export const send = asyncHandler(async (req, res) => {
   await guard(req, req.params.orderId)
-  ok(res, await orders.sendOrder(req.params.orderId))
+  const body = sendOrderSchema.parse(req.body ?? {})
+  ok(res, await orders.sendOrder(req.params.orderId, { actorId: req.user?.id, idempotencyKey: body.idempotencyKey }))
 })
 
 export const progress = asyncHandler(async (req, res) => {
@@ -106,6 +121,11 @@ export const discount = asyncHandler(async (req, res) => {
 export const pay = asyncHandler(async (req, res) => {
   await guard(req, req.params.orderId)
   ok(res, await actions.payOrder(req.user!, req.params.orderId, paymentSchema.parse(req.body)))
+})
+
+export const paySplit = asyncHandler(async (req, res) => {
+  await guard(req, req.params.orderId)
+  ok(res, await actions.paySplit(req.user!, req.params.orderId, splitPaySchema.parse(req.body)))
 })
 
 export const refund = asyncHandler(async (req, res) => {

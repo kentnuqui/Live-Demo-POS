@@ -164,9 +164,6 @@ export function FloorPage() {
           {seated} of {total} seated
         </p>
         <div className="ml-auto flex gap-2">
-          <Button size="lg" onClick={() => navigate('/orders/new?service=takeout')}>
-            Take out
-          </Button>
           {canEdit ? (
             <Button variant={editing ? 'default' : 'outline'} onClick={() => setEditing((value) => !value)}>
               {editing ? 'Done' : 'Arrange'}

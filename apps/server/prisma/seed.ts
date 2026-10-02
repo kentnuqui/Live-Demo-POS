@@ -2,6 +2,7 @@ import bcrypt from 'bcryptjs'
 import { PrismaClient, type MenuStation, type TableShape, type TableZone } from '@prisma/client'
 import { priceItems } from '@towns/shared'
 import '../src/config/env.js'
+import { env } from '../src/config/env.js'
 import { pinLookup } from '../src/lib/pin.js'
 import { seedModifiers } from './seed-modifiers.js'
 
@@ -100,6 +101,7 @@ async function tablesFor(
 async function main() {
   const existing = await prisma.restaurantProfile.findFirst()
   if (existing) {
+    await ensureArDemo()
     console.log('Already seeded')
     return
   }
@@ -240,6 +242,9 @@ async function main() {
       type: 'DINE_IN',
       status: 'SENT',
       progress: 'ORDERED',
+      kitchenStatus: 'NEW',
+      kitchenStartedAt: new Date(),
+      ticketNumber: 1042,
       source: 'POS',
       tableId: tableA1.id,
       serverId: cashier.id,
@@ -255,7 +260,8 @@ async function main() {
             unitPriceCents: ramen.priceCents,
             quantity: 1,
             station: ramen.station,
-            sentAt: new Date()
+            sentAt: new Date(),
+            firedQuantity: 1
           },
           {
             id: '33333333-3333-4333-8333-333333333333',
@@ -264,7 +270,8 @@ async function main() {
             unitPriceCents: tea.priceCents,
             quantity: 1,
             station: tea.station,
-            sentAt: new Date()
+            sentAt: new Date(),
+            firedQuantity: 1
           }
         ]
       }
@@ -305,8 +312,42 @@ async function main() {
 
   // Seed modifier groups and options
   await seedModifiers()
+  await ensureArDemo()
 
   console.log('Seeded Towns. Cashier PIN 2001. Manager PIN 1001.')
+}
+
+/** House account for local development. Never writes invoices or payments, and never runs in production. */
+async function ensureArDemo() {
+  if (env.NODE_ENV === 'production') return
+  const branch = await prisma.branch.findFirst({ where: { code: 'TOWNS' } })
+  if (!branch) return
+  const found = await prisma.arAccount.findFirst({ where: { branchId: branch.id, accountNumber: 'AR-1001' } })
+  if (found) return
+  const manager = await prisma.user.findFirst({ where: { email: 'manager@towns.test' } })
+  await prisma.arAccount.create({
+    data: {
+      branchId: branch.id,
+      accountNumber: 'AR-1001',
+      customerName: 'Accounts Payable',
+      companyName: 'ABC Restaurant',
+      contactPerson: 'Accounts Payable',
+      phone: '+1 415 555 0100',
+      email: 'ap@abc-restaurant.test',
+      address: '100 Market Street',
+      creditLimitCents: 500_000,
+      enforceCreditLimit: true,
+      paymentTerms: 'NET_30',
+      customTermDays: 0,
+      status: 'ACTIVE',
+      notes: 'House account',
+      createdById: manager?.id ?? null,
+      updatedById: manager?.id ?? null
+    }
+  })
+  await prisma.arSequence.create({
+    data: { branchId: branch.id, kind: 'account', value: 1001 }
+  })
 }
 
 main()

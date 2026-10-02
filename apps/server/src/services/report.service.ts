@@ -1,4 +1,4 @@
-import { PAYMENT_METHODS, type DailyReportDto, type PaymentMethod, type TenderTotalDto } from '@towns/shared'
+import { PAYMENT_METHODS, dayMoney, type DailyReportDto, type PaymentMethod, type TenderTotalDto } from '@towns/shared'
 import { AppError } from '../lib/app-error.js'
 import { todayInTimeZone, zonedDayRange } from '../lib/day.js'
 import { prisma } from '../lib/prisma.js'
@@ -24,7 +24,7 @@ export async function dailyReport(branchId: string, day?: string): Promise<Daily
     throw new AppError(400, 'Choose a real date')
   }
 
-  const [orders, payments, refunds] = await Promise.all([
+  const [orders, payments, refunds, collections] = await Promise.all([
     prisma.order.findMany({
       where: { branchId, status: 'COMPLETED', closedAt: { gte: range.start, lt: range.end } },
       select: {
@@ -41,6 +41,10 @@ export async function dailyReport(branchId: string, day?: string): Promise<Daily
     prisma.refund.findMany({
       where: { createdAt: { gte: range.start, lt: range.end }, order: { branchId } },
       select: { method: true, amountCents: true }
+    }),
+    prisma.arPayment.findMany({
+      where: { branchId, createdAt: { gte: range.start, lt: range.end } },
+      select: { method: true, amountCents: true }
     })
   ])
 
@@ -56,6 +60,19 @@ export async function dailyReport(branchId: string, day?: string): Promise<Daily
   const tenders = PAYMENT_METHODS.map((method) => tender(method, payments, refunds))
   const refundCents = tenders.reduce((sum, tenderRow) => sum + tenderRow.refundsCents, 0)
   const refundCount = tenders.reduce((sum, tenderRow) => sum + tenderRow.refundCount, 0)
+  const money = dayMoney({
+    cashSales: sumMethod(payments, 'CASH'),
+    cardSales: sumMethod(payments, 'CARD'),
+    otherSales: sumMethod(payments, 'OTHER'),
+    arSales: sumMethod(payments, 'ACCOUNT'),
+    cashCollections: sumMethod(collections, 'CASH'),
+    cardCollections: sumMethod(collections, 'CARD'),
+    otherCollections: sumMethod(collections, 'OTHER'),
+    cashRefunds: sumMethod(refunds, 'CASH'),
+    cardRefunds: sumMethod(refunds, 'CARD'),
+    otherRefunds: sumMethod(refunds, 'OTHER'),
+    accountRefunds: sumMethod(refunds, 'ACCOUNT')
+  })
 
   return {
     day: selected,
@@ -70,8 +87,15 @@ export async function dailyReport(branchId: string, day?: string): Promise<Daily
     refundCents,
     refundCount,
     netCents: totals.salesCents - refundCents,
-    tenders
+    tenders,
+    arSalesCents: money.arSalesCents,
+    arCollectionsCents: money.arCollectionsCents,
+    cashDrawerCents: money.cashDrawerCents
   }
+}
+
+function sumMethod(rows: Array<{ method: PaymentMethod; amountCents: number }>, method: PaymentMethod): number {
+  return rows.filter((row) => row.method === method).reduce((sum, row) => sum + row.amountCents, 0)
 }
 
 function tender(

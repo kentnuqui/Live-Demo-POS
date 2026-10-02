@@ -45,7 +45,18 @@ export function guestReceipt(
         method: PAYMENT_METHOD_LABEL[refund.method],
         amountCents: refund.amountCents,
         reason: refund.reason
-      }))
+      })),
+      ...(order.ar
+        ? {
+            ar: {
+              accountName: order.ar.accountName,
+              invoiceNumber: order.ar.invoiceNumber,
+              dueDate: order.ar.dueOn,
+              balanceDueCents: order.ar.remainingCents,
+              termsLabel: order.ar.termsLabel
+            }
+          }
+        : {})
     },
     settings.receiptFooter
   )

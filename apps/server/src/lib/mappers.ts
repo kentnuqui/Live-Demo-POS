@@ -28,6 +28,7 @@ import type {
   RestaurantProfileDto,
   UserDto
 } from '@towns/shared'
+import { termsLabel, type ArTerms } from '@towns/shared'
 
 type OrderWithRelations = Order & {
   items: OrderItem[]
@@ -35,6 +36,15 @@ type OrderWithRelations = Order & {
   refunds: Refund[]
   table: Pick<DiningTable, 'id' | 'label'> | null
   server: Pick<User, 'id' | 'firstName' | 'lastName'> | null
+  arInvoice?: {
+    invoiceNumber: string
+    remainingCents: number
+    dueOn: string
+    terms: ArTerms
+    termDays: number
+    status: 'OPEN' | 'PARTIALLY_PAID' | 'PAID' | 'OVERDUE' | 'VOIDED' | 'WRITTEN_OFF'
+    account: { companyName: string; customerName: string }
+  } | null
 }
 
 export function toUserDto(user: User): UserDto {
@@ -124,6 +134,7 @@ export function toOrderItemDto(item: OrderItemWithModifiers): OrderItemDto {
     station: item.station,
     voided: item.voided,
     sentAt: item.sentAt ? item.sentAt.toISOString() : null,
+    firedQuantity: item.firedQuantity > 0 ? item.firedQuantity : item.sentAt ? item.quantity : 0,
     modifiers: item.modifiers?.map((mod) => ({
       id: mod.id,
       orderItemId: mod.orderItemId,
@@ -167,6 +178,8 @@ export function toOrderDto(order: OrderWithRelations): OrderDto {
     type: order.type,
     status: order.status,
     progress: order.progress,
+    serviceStatus: order.serviceStatus,
+    ticketNumber: order.ticketNumber,
     source: order.source,
     tableId: order.tableId,
     tableLabel: order.table?.label ?? null,
@@ -196,7 +209,17 @@ export function toOrderDto(order: OrderWithRelations): OrderDto {
     refunds: order.refunds.map(toRefundDto),
     createdAt: order.createdAt.toISOString(),
     updatedAt: order.updatedAt.toISOString(),
-    closedAt: order.closedAt ? order.closedAt.toISOString() : null
+    closedAt: order.closedAt ? order.closedAt.toISOString() : null,
+    ar: order.arInvoice
+      ? {
+          invoiceNumber: order.arInvoice.invoiceNumber,
+          accountName: order.arInvoice.account.companyName || order.arInvoice.account.customerName,
+          remainingCents: order.arInvoice.remainingCents,
+          dueOn: order.arInvoice.dueOn,
+          termsLabel: termsLabel(order.arInvoice.terms, order.arInvoice.termDays),
+          status: order.arInvoice.status
+        }
+      : null
   }
 }
 

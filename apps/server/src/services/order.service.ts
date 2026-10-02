@@ -2,12 +2,19 @@ import {
   ORDER_STATUSES,
   ORDER_TYPES,
   buildStationTicket,
+  firedCount,
+  linesToFire,
+  submissionKind,
   type AddItemsInput,
+  type MenuStation,
   type OrderCreateInput,
   type OrderPatchInput,
   type OrderStatus,
   type OrderType,
-  type StationTicketDto
+  type SendOrderResultDto,
+  type StationTicketDto,
+  type TicketHeader,
+  type TicketLineItem
 } from '@towns/shared'
 import type { OrderDto } from '@towns/shared'
 import type { AuthUser } from '../middleware/auth.js'
@@ -16,7 +23,24 @@ import { prisma } from '../lib/prisma.js'
 import { context, publish, type ServiceContext } from '../lib/context.js'
 import { transaction, type Tx } from '../lib/transaction.js'
 import { releaseTable } from './floor.service.js'
+import { kitchenOpenPatch, syncOrderPass } from './kitchen.service.js'
+import {
+  cancelFiredQuantity,
+  createKitchenSubmission,
+  describeAction,
+  ensureInitialSubmission,
+  findSubmissionByKey,
+  recordOrderEvent,
+  sentUnits,
+  type SubmissionLine
+} from './kitchen-submission.service.js'
 import { assertMutable, loadOrder, newId, orderInclude, present, progressFor, recalculate } from './order-support.js'
+
+type OrderActor = Partial<ServiceContext> & {
+  actorId?: string | null
+  confirmCancel?: boolean
+  idempotencyKey?: string | null
+}
 
 async function branchNames(tx: Parameters<typeof loadOrder>[0], branchId: string) {
   const [branch, profile] = await Promise.all([
@@ -190,25 +214,18 @@ async function seatService(
   }
 }
 
-/**
- * How many of this line have already gone to the kitchen.
- * Older rows only stored sentAt, so a sent line with no fired count counts as fully fired.
- */
-function firedCount(item: { quantity: number; firedQuantity: number; sentAt: Date | null }): number {
-  if (item.firedQuantity > 0) return item.firedQuantity
-  if (item.sentAt) return item.quantity
-  return 0
+async function lockOrder(tx: Tx, orderId: string): Promise<void> {
+  await tx.$queryRaw`SELECT id FROM orders WHERE id = ${orderId} FOR UPDATE`
 }
 
 /** Appends items. Items with modifiers create separate lines (no quantity merging for customized items). */
-export async function addItems(
-  orderId: string,
-  input: AddItemsInput,
-  ctx?: Partial<ServiceContext>
-): Promise<OrderDto> {
+export async function addItems(orderId: string, input: AddItemsInput, ctx?: OrderActor): Promise<OrderDto> {
   const current = context(ctx)
+  const actorId = ctx?.actorId
   const order = await transaction(current.db, async (tx) => {
+    await lockOrder(tx, orderId)
     const existing = await loadOrder(tx, orderId)
+    const added: Array<{ name: string; quantity: number }> = []
     assertMutable(existing.status)
     const known = new Set(existing.items.map((item) => item.id))
     const menuIds = [...new Set(input.items.map((item) => item.menuItemId))]
@@ -312,6 +329,7 @@ export async function addItems(
         keepItem.quantity += item.quantity + extraQuantity
         keepItem.firedQuantity = fired
         existing.items = existing.items.filter((row) => !rest.some((extra) => extra.id === row.id))
+        added.push({ name: dish.name, quantity: item.quantity })
       } else {
         // Create new order item
         await tx.orderItem.create({
@@ -343,57 +361,16 @@ export async function addItems(
             })
           }
         }
+        added.push({ name: dish.name, quantity: item.quantity })
       }
-      
+
       known.add(id)
     }
-    
-    await recalculate(tx, orderId)
-    return loadOrder(tx, orderId)
-  })
-  publish(current, order.branchId, 'order.updated', { orderId })
-  return present(order)
-}
 
-/** Raises or lowers a line. At zero the line is voided so the check total drops. */
-export async function adjustItemQuantity(
-  orderId: string,
-  itemId: string,
-  delta: number,
-  ctx?: Partial<ServiceContext>
-): Promise<OrderDto> {
-  const current = context(ctx)
-  const order = await transaction(current.db, async (tx) => {
-    const existing = await loadOrder(tx, orderId)
-    assertMutable(existing.status)
-    const item = existing.items.find((row) => row.id === itemId)
-    if (!item || item.voided) throw new AppError(404, 'Item not found')
-    const next = item.quantity + delta
-    if (next <= 0) {
-      await tx.orderItem.update({ where: { id: itemId }, data: { voided: true } })
-    } else {
-      const fired = Math.min(firedCount(item), next)
-      await tx.orderItem.update({
-        where: { id: itemId },
-        data: { quantity: next, firedQuantity: fired }
-      })
+    if (added.length > 0) {
+      await recordOrderEvent(tx, existing, 'ITEMS_ADDED', actorId, await describeAction(tx, actorId, 'added', added))
     }
-    await recalculate(tx, orderId)
-    return loadOrder(tx, orderId)
-  })
-  publish(current, order.branchId, 'order.updated', { orderId })
-  return present(order)
-}
 
-export async function voidItem(orderId: string, itemId: string, ctx?: Partial<ServiceContext>): Promise<OrderDto> {
-  const current = context(ctx)
-  const order = await transaction(current.db, async (tx) => {
-    const existing = await loadOrder(tx, orderId)
-    assertMutable(existing.status)
-    const item = existing.items.find((row) => row.id === itemId)
-    if (!item) throw new AppError(404, 'Item not found')
-    if (item.voided) return existing
-    await tx.orderItem.update({ where: { id: itemId }, data: { voided: true } })
     await recalculate(tx, orderId)
     return loadOrder(tx, orderId)
   })
@@ -402,69 +379,178 @@ export async function voidItem(orderId: string, itemId: string, ctx?: Partial<Se
 }
 
 /**
- * Fires every unsent line to its station. Calling send again only prints the new lines.
+ * Raises or lowers a line. At zero the line is voided so the check total drops.
+ * Quantity already fired is left alone unless the cashier confirms a kitchen cancellation.
  */
-export async function sendOrder(
-  orderId: string,
-  ctx?: Partial<ServiceContext>
-): Promise<{ order: OrderDto; tickets: StationTicketDto[] }> {
+export async function adjustItemQuantity(orderId: string, itemId: string, delta: number, ctx?: OrderActor): Promise<OrderDto> {
   const current = context(ctx)
+  const actorId = ctx?.actorId
   const result = await transaction(current.db, async (tx) => {
+    await lockOrder(tx, orderId)
+    const existing = await loadOrder(tx, orderId)
+    assertMutable(existing.status)
+    const item = existing.items.find((row) => row.id === itemId)
+    if (!item || item.voided) throw new AppError(404, 'Item not found')
+    const fired = firedCount(item)
+    const next = item.quantity + delta
+    const cancel = Math.max(0, fired - Math.max(next, 0))
+    if (cancel > 0 && !ctx?.confirmCancel) {
+      throw new AppError(409, 'Already sent to the kitchen. Confirm to cancel it.')
+    }
+    if (next <= 0) {
+      await tx.orderItem.update({ where: { id: itemId }, data: { voided: true } })
+    } else {
+      await tx.orderItem.update({
+        where: { id: itemId },
+        data: { quantity: next, firedQuantity: Math.min(fired, next) }
+      })
+    }
+    if (cancel > 0) {
+      await cancelFiredQuantity(tx, itemId, cancel)
+      await recordOrderEvent(
+        tx,
+        existing,
+        'ITEMS_CANCELLED',
+        actorId,
+        await describeAction(tx, actorId, 'cancelled', [{ name: item.name, quantity: cancel }])
+      )
+    }
+    await recalculate(tx, orderId)
+    return { order: await loadOrder(tx, orderId), cancelled: cancel > 0 }
+  })
+  publish(current, result.order.branchId, 'order.updated', { orderId })
+  if (result.cancelled) publish(current, result.order.branchId, 'order.items.cancelled', { orderId })
+  return present(result.order)
+}
+
+/** Removes a line. Food already fired needs an explicit cancel so the pass is told to stop. */
+export async function voidItem(orderId: string, itemId: string, ctx?: OrderActor): Promise<OrderDto> {
+  const current = context(ctx)
+  const actorId = ctx?.actorId
+  const result = await transaction(current.db, async (tx) => {
+    await lockOrder(tx, orderId)
+    const existing = await loadOrder(tx, orderId)
+    assertMutable(existing.status)
+    const item = existing.items.find((row) => row.id === itemId)
+    if (!item) throw new AppError(404, 'Item not found')
+    if (item.voided) return { order: existing, cancelled: false }
+    const fired = firedCount(item)
+    if (fired > 0 && !ctx?.confirmCancel) {
+      throw new AppError(409, 'Already sent to the kitchen. Confirm to cancel it.')
+    }
+    await tx.orderItem.update({ where: { id: itemId }, data: { voided: true } })
+    if (fired > 0) {
+      await cancelFiredQuantity(tx, itemId, fired)
+      await recordOrderEvent(
+        tx,
+        existing,
+        'ITEMS_CANCELLED',
+        actorId,
+        await describeAction(tx, actorId, 'cancelled', [{ name: item.name, quantity: fired }])
+      )
+    }
+    await recalculate(tx, orderId)
+    return { order: await loadOrder(tx, orderId), cancelled: fired > 0 }
+  })
+  publish(current, result.order.branchId, 'order.updated', { orderId })
+  if (result.cancelled) publish(current, result.order.branchId, 'order.items.cancelled', { orderId })
+  return present(result.order)
+}
+
+/**
+ * Fires only the unsent remainder of each line.
+ * The check number does not change. A second click with the same key returns the same firing.
+ */
+export async function sendOrder(orderId: string, ctx?: OrderActor): Promise<SendOrderResultDto> {
+  const current = context(ctx)
+  const actorId = ctx?.actorId
+  const idempotencyKey = ctx?.idempotencyKey?.trim() || null
+  const result = await transaction(current.db, async (tx) => {
+    await lockOrder(tx, orderId)
+    if (idempotencyKey) {
+      const prior = await findSubmissionByKey(tx, idempotencyKey)
+      if (prior) {
+        if (prior.orderId !== orderId) throw new AppError(409, 'Unable to send new items to kitchen.')
+        const order = await loadOrder(tx, orderId)
+        const names = await branchNames(tx, order.branchId)
+        return {
+          order,
+          tickets: stationChits(names, order, clockLabel(prior.startedAt), prior.kind === 'ADDITION', prior.items.map(submissionChitLine)),
+          sentCount: sentUnits(prior),
+          replayed: true,
+          addition: prior.kind === 'ADDITION'
+        }
+      }
+    }
+
+    const loaded = await loadOrder(tx, orderId)
+    await ensureInitialSubmission(tx, loaded)
     const existing = await loadOrder(tx, orderId)
     if (existing.status === 'COMPLETED' || existing.status === 'CANCELLED' || existing.status === 'BILLING') {
       throw new AppError(409, 'This check can no longer be sent')
     }
-    const fresh = existing.items.flatMap((item) => {
-      if (item.voided) return []
-      const delta = item.quantity - firedCount(item)
-      if (delta <= 0) return []
-      return [{ ...item, quantity: delta }]
-    })
+    const fresh = linesToFire(existing.items)
     if (fresh.length === 0) {
-      if (existing.status !== 'OPEN') return { order: existing, tickets: [] }
-      throw new AppError(400, 'Nothing new to send')
+      if (existing.status !== 'OPEN') {
+        return { order: existing, tickets: [], sentCount: 0, replayed: false, addition: false }
+      }
+      throw new AppError(400, 'No new items to send.')
     }
+
     const now = new Date()
+    const priorCount = await tx.kitchenSubmission.count({ where: { orderId } })
+    const kind = submissionKind(priorCount)
+    const lines = fresh.map(toSubmissionLine)
+    await createKitchenSubmission(tx, {
+      orderId,
+      branchId: existing.branchId,
+      sequence: priorCount + 1,
+      kind,
+      now,
+      actorId,
+      idempotencyKey,
+      lines
+    })
     for (const item of existing.items) {
       if (item.voided || item.quantity <= firedCount(item)) continue
       await tx.orderItem.update({
         where: { id: item.id },
-        data: { sentAt: now, firedQuantity: item.quantity }
+        data: { sentAt: item.sentAt ?? now, firedQuantity: item.quantity }
       })
     }
     const nextStatus = existing.status === 'OPEN' ? 'SENT' : existing.status
+    const kitchen = kind === 'INITIAL' || !existing.kitchenStatus || existing.kitchenStatus === 'COMPLETED'
+      ? await kitchenOpenPatch(tx, existing, now)
+      : {}
     await tx.order.update({
       where: { id: orderId },
-      data: { status: nextStatus, progress: progressFor(nextStatus) }
+      data: { status: nextStatus, progress: progressFor(nextStatus), ...kitchen }
     })
+    await syncOrderPass(tx, orderId)
+    await recordOrderEvent(tx, existing, 'ITEMS_SENT', actorId, await describeAction(tx, actorId, 'sent', lines))
     const order = await loadOrder(tx, orderId)
     const names = await branchNames(tx, order.branchId)
-    const when = now.toLocaleString('en-US', { hour: 'numeric', minute: '2-digit' })
-    const stations = [...new Set(fresh.map((item) => item.station))]
-    const tickets: StationTicketDto[] = stations.map((station) => ({
-      station,
-      lines: buildStationTicket(
-        {
-          restaurantName: names.restaurantName,
-          branchName: names.branchName,
-          tableLabel: order.table?.label ?? null,
-          orderType: order.type,
-          guestName: order.guestName,
-          serverName: order.server ? `${order.server.firstName} ${order.server.lastName}` : null,
-          showTable: true,
-          showServer: true,
-          when
-        },
-        station,
-        fresh
-          .filter((item) => item.station === station)
-          .map((item) => ({ quantity: item.quantity, name: item.name, notes: item.notes }))
-      )
-    }))
-    return { order, tickets }
+    return {
+      order,
+      tickets: stationChits(names, order, clockLabel(now), kind === 'ADDITION', lines),
+      sentCount: lines.reduce((sum, line) => sum + line.quantity, 0),
+      replayed: false,
+      addition: kind === 'ADDITION'
+    }
   })
-  publish(current, result.order.branchId, 'order.updated', { orderId })
-  return { order: present(result.order), tickets: result.tickets }
+  if (!result.replayed && result.sentCount > 0) {
+    publish(current, result.order.branchId, 'order.updated', { orderId })
+    publish(current, result.order.branchId, result.addition ? 'order.items.added' : 'order.sent', {
+      orderId,
+      sentCount: result.sentCount
+    })
+  }
+  return {
+    order: present(result.order),
+    tickets: result.tickets,
+    sentCount: result.sentCount,
+    replayed: result.replayed
+  }
 }
 
 /** Moves kitchen-facing status forward. Never backward. */
@@ -496,4 +582,90 @@ export async function assertOrderBranch(orderId: string, branchId: string): Prom
   const order = await prisma.order.findUnique({ where: { id: orderId }, select: { branchId: true } })
   if (!order) throw new AppError(404, 'Order not found')
   if (order.branchId !== branchId) throw new AppError(403, 'Outside your branch')
+}
+
+function clockLabel(when: Date): string {
+  return when.toLocaleString('en-US', { hour: 'numeric', minute: '2-digit' })
+}
+
+function toSubmissionLine(item: {
+  id: string
+  name: string
+  quantity: number
+  notes: string
+  station: MenuStation
+  modifiers?: Array<{ modifierName: string; priceCents: number }>
+}): SubmissionLine {
+  return {
+    id: item.id,
+    name: item.name,
+    quantity: item.quantity,
+    notes: item.notes,
+    station: item.station,
+    modifiers: (item.modifiers ?? []).map((modifier) => ({ name: modifier.modifierName, priceCents: modifier.priceCents }))
+  }
+}
+
+function submissionChitLine(item: {
+  station: MenuStation
+  quantity: number
+  name: string
+  notes: string
+  modifiers: Array<{ name: string; priceCents: number }>
+}): SubmissionLine {
+  return {
+    id: item.name,
+    station: item.station,
+    quantity: item.quantity,
+    name: item.name,
+    notes: item.notes,
+    modifiers: item.modifiers
+  }
+}
+
+/** Prints only the lines in this firing, routed to the station each dish already uses. */
+function stationChits(
+  names: { restaurantName: string; branchName: string },
+  order: {
+    ticketNumber: number | null
+    type: string
+    guestName: string
+    table: { label: string } | null
+    server: { firstName: string; lastName: string } | null
+  },
+  when: string,
+  addition: boolean,
+  lines: SubmissionLine[]
+): StationTicketDto[] {
+  const header: TicketHeader = {
+    restaurantName: names.restaurantName,
+    branchName: names.branchName,
+    tableLabel: order.table?.label ?? null,
+    orderType: order.type,
+    guestName: order.guestName,
+    serverName: order.server ? `${order.server.firstName} ${order.server.lastName}` : null,
+    showTable: true,
+    showServer: true,
+    when,
+    ticketNumber: order.ticketNumber,
+    addition
+  }
+  const stations = [...new Set(lines.map((line) => line.station))]
+  return stations.map((station) => ({
+    station,
+    lines: buildStationTicket(
+      header,
+      station,
+      lines.filter((line) => line.station === station).map(chitItem)
+    )
+  }))
+}
+
+function chitItem(line: SubmissionLine): TicketLineItem {
+  return {
+    quantity: line.quantity,
+    name: line.name,
+    notes: line.notes,
+    modifiers: line.modifiers.map((modifier) => ({ modifierName: modifier.name, priceCents: modifier.priceCents }))
+  }
 }

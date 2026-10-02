@@ -76,3 +76,19 @@ export function formatMoney(minor: number, currency: string, locale?: string): s
 export function formatBps(bps: number): string {
   return `${(bps / 100).toFixed(2)}%`
 }
+
+/**
+ * Parses a major-unit amount ("12.50") into minor units.
+ * Extra fraction digits are rejected so a typed value cannot be rounded by accident.
+ */
+export function parseMajorToMinor(input: string, currency: string): number | null {
+  const trimmed = input.trim()
+  if (!/^\d+(\.\d+)?$/.test(trimmed)) return null
+  const exponent = minorExponent(currency)
+  const [whole, fraction = ''] = trimmed.split('.')
+  if (fraction.length > exponent) return null
+  const padded = fraction.padEnd(exponent, '0')
+  const minor = Number(whole) * 10 ** exponent + (padded ? Number(padded) : 0)
+  if (!Number.isSafeInteger(minor)) return null
+  return minor
+}

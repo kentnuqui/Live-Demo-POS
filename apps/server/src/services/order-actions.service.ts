@@ -1,5 +1,6 @@
-import type { DiscountInput, PaymentInput, RefundInput, SplitInput } from '@towns/shared'
+import type { DiscountInput, PaymentInput, RefundInput, SplitInput, SplitPayInput } from '@towns/shared'
 import type { OrderDto } from '@towns/shared'
+import { formatMoney, quoteTender, settleSplitTenders } from '@towns/shared'
 import type { AuthUser } from '../middleware/auth.js'
 import { AppError } from '../lib/app-error.js'
 import { context, publish, type ServiceContext } from '../lib/context.js'
@@ -7,6 +8,7 @@ import { transaction } from '../lib/transaction.js'
 import { releaseTable } from './floor.service.js'
 import { createOrder } from './order.service.js'
 import { assertMutable, loadOrder, orderInclude, present, progressFor, recalculate } from './order-support.js'
+import { adjustArForRefund, createArSale } from './ar-sale.service.js'
 
 function collected(order: { payments: Array<{ amountCents: number }> }): number {
   return order.payments.reduce((sum, payment) => sum + payment.amountCents, 0)
@@ -194,7 +196,7 @@ export async function finishOrder(orderId: string, ctx?: Partial<ServiceContext>
       where: { id: orderId },
       data: { status: 'COMPLETED', progress: 'COMPLETED', closedAt: existing.closedAt ?? new Date() }
     })
-    await releaseTable(tx, existing.tableId)
+    await releaseTable(tx, existing.tableId, 'AVAILABLE')
     return loadOrder(tx, orderId)
   })
   publish(current, order.branchId, 'order.updated', { orderId })
@@ -233,7 +235,7 @@ export async function applyDiscount(orderId: string, input: DiscountInput, ctx?:
 /**
  * Records one tender. Cash may be more than the balance and returns change.
  * The same payment id is ignored, so a retry cannot charge the guest twice.
- * The check closes, and the table is released, once nothing is left due.
+ * The check closes once nothing is left due, and the table opens for the next order.
  */
 export async function payOrder(
   actor: AuthUser,
@@ -258,38 +260,132 @@ export async function payOrder(
         where: { id: orderId },
         data: { status: 'COMPLETED', progress: 'COMPLETED', closedAt: new Date() }
       })
-      await releaseTable(tx, priced.tableId)
+      await releaseTable(tx, priced.tableId, 'AVAILABLE')
       return loadOrder(tx, orderId)
     }
 
-    const cash = input.method === 'CASH'
-    const tendered = cash ? (input.tenderedCents ?? input.amountCents ?? 0) : (input.amountCents ?? due)
-    if (tendered <= 0) throw new AppError(400, cash ? 'Enter the cash received' : 'Enter an amount')
-    const applied = Math.min(tendered, due)
-    if (!cash && tendered > due) throw new AppError(400, 'That is more than the balance')
+    const quoted = quoteTender(input.method, due, input.method === 'ACCOUNT' ? { amountCents: due } : input)
+    if (input.method === 'ACCOUNT' && input.amountCents != null && input.amountCents !== due) {
+      throw new AppError(400, 'An account sale must cover the full balance.')
+    }
+    if (!quoted.ok) {
+      const cash = input.method === 'CASH'
+      throw new AppError(
+        400,
+        quoted.reason === 'empty' ? (cash ? 'Enter the cash received' : 'Enter an amount') : 'That is more than the balance'
+      )
+    }
     await tx.payment.create({
       data: {
         id: input.id,
         orderId,
         method: input.method,
-        amountCents: applied,
-        tenderedCents: cash ? tendered : applied,
-        changeCents: cash ? tendered - applied : 0,
+        amountCents: quoted.quote.amountCents,
+        tenderedCents: quoted.quote.tenderedCents,
+        changeCents: quoted.quote.changeCents,
         note: input.note?.trim() ?? '',
         cashierId: actor.id
       }
     })
-    const settled = applied >= due
+    if (input.method === 'ACCOUNT') {
+      await createArSale(
+        tx,
+        actor,
+        { id: orderId, branchId: priced.branchId, currency: priced.currency, guestName: priced.guestName },
+        input,
+        quoted.quote.amountCents
+      )
+    }
+    const settled = quoted.quote.amountCents >= due
     await tx.order.update({
       where: { id: orderId },
       data: settled
         ? { status: 'COMPLETED', progress: 'COMPLETED', closedAt: new Date() }
         : { status: 'BILLING', progress: progressFor('BILLING') }
     })
-    if (settled) await releaseTable(tx, priced.tableId)
+    if (settled) await releaseTable(tx, priced.tableId, 'AVAILABLE')
     else if (priced.tableId) {
       await tx.diningTable.update({ where: { id: priced.tableId }, data: { status: 'BILLING' } })
     }
+    return loadOrder(tx, orderId)
+  })
+  publish(current, order.branchId, 'order.updated', { orderId })
+  publish(current, order.branchId, 'floor.updated')
+  return present(order)
+}
+
+/**
+ * Records every tender on one check, then closes it.
+ * The order is not split. Cash change is stored on that tender and is not revenue.
+ * The same payment ids are ignored, so a retry cannot charge the guest twice.
+ */
+export async function paySplit(
+  actor: AuthUser,
+  orderId: string,
+  input: SplitPayInput,
+  ctx?: Partial<ServiceContext>
+): Promise<OrderDto> {
+  const current = context(ctx)
+  const order = await transaction(current.db, async (tx) => {
+    await lockOrder(tx, orderId)
+    if (input.payments.some((payment) => payment.method === 'ACCOUNT')) {
+      throw new AppError(400, 'Account sales cover the full balance. Use Account on the main payment screen.')
+    }
+    const ids = input.payments.map((payment) => payment.id)
+    if (new Set(ids).size !== ids.length) {
+      throw new AppError(400, 'Unable to add payment. Please try again.')
+    }
+    const existingPayments = await tx.payment.findMany({ where: { id: { in: ids } } })
+    if (existingPayments.some((payment) => payment.orderId !== orderId)) {
+      throw new AppError(400, 'Unable to add payment. Please try again.')
+    }
+    const recorded = new Set(existingPayments.map((payment) => payment.id))
+    if (recorded.size === ids.length) return loadOrder(tx, orderId)
+
+    const existing = await loadOrder(tx, orderId)
+    if (existing.status === 'COMPLETED' || existing.status === 'CANCELLED') {
+      throw new AppError(409, 'This check is already closed')
+    }
+    await recalculate(tx, orderId)
+    const priced = await loadOrder(tx, orderId)
+    const due = priced.totalCents - collected(priced)
+    const pending = input.payments.filter((payment) => !recorded.has(payment.id))
+    if (due <= 0) throw new AppError(400, 'This check is already paid.')
+
+    const settled = settleSplitTenders(due, pending)
+    if (!settled.ok) {
+      throw new AppError(
+        400,
+        settled.reason === 'empty'
+          ? 'Please enter a valid payment amount.'
+          : 'Payment amount cannot exceed the remaining balance.'
+      )
+    }
+    if (settled.remainingCents > 0) {
+      throw new AppError(400, `Remaining balance: ${formatMoney(settled.remainingCents, priced.currency)}`)
+    }
+    for (let index = 0; index < pending.length; index += 1) {
+      const payment = pending[index]
+      const line = settled.lines[index]
+      if (!payment || !line) throw new AppError(400, 'Unable to add payment. Please try again.')
+      await tx.payment.create({
+        data: {
+          id: payment.id,
+          orderId,
+          method: payment.method,
+          amountCents: line.amountCents,
+          tenderedCents: line.tenderedCents,
+          changeCents: line.changeCents,
+          note: payment.note?.trim() ?? '',
+          cashierId: actor.id
+        }
+      })
+    }
+    await tx.order.update({
+      where: { id: orderId },
+      data: { status: 'COMPLETED', progress: 'COMPLETED', closedAt: new Date() }
+    })
+    await releaseTable(tx, priced.tableId, 'AVAILABLE')
     return loadOrder(tx, orderId)
   })
   publish(current, order.branchId, 'order.updated', { orderId })
@@ -323,6 +419,7 @@ export async function refundOrder(
         cashierId: actor.id
       }
     })
+    await adjustArForRefund(tx, actor, orderId, existing.currency, input)
     await tx.order.update({ where: { id: orderId }, data: { notes: existing.notes } })
     return loadOrder(tx, orderId)
   })

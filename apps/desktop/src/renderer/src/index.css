@@ -63,7 +63,7 @@ textarea {
 }
 
 .rise {
-  animation: rise 240ms ease;
+  animation: rise 180ms ease;
 }
 
 @keyframes rise {
@@ -79,4 +79,10 @@ textarea {
 
 .num {
   font-variant-numeric: tabular-nums;
+}
+
+/* The pass stays on the existing dark palette so a kitchen monitor is not a bright page. */
+.kitchen-pass {
+  background: hsl(var(--background));
+  color: hsl(var(--foreground));
 }

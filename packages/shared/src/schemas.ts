@@ -1,5 +1,9 @@
 import { z } from 'zod'
 import {
+  AR_ACCOUNT_STATUSES,
+  AR_INVOICE_STATUSES,
+  AR_TERMS,
+  COLLECTION_METHODS,
   DISCOUNT_KINDS,
   ORDER_STATUSES,
   ORDER_TYPES,
@@ -148,6 +152,10 @@ export const orderPatchSchema = z.object({
   tableId: uuid.nullable().optional()
 })
 
+export const sendOrderSchema = z.object({
+  idempotencyKey: uuid.optional()
+})
+
 export const addItemsSchema = z.object({
   items: z
     .array(
@@ -187,6 +195,10 @@ export const progressSchema = z.object({
   status: z.enum(ORDER_STATUSES).refine((status) => ['PREPARING', 'READY', 'SERVED'].includes(status))
 })
 
+export const kitchenAdvanceSchema = z.object({
+  status: z.enum(['PREPARING', 'READY', 'COMPLETED'])
+})
+
 export const discountSchema = z
   .object({
     kind: z.enum(DISCOUNT_KINDS),
@@ -207,7 +219,16 @@ export const paymentSchema = z.object({
   method: z.enum(PAYMENT_METHODS),
   amountCents: z.number().int().min(0).max(100_000_000).optional(),
   tenderedCents: z.number().int().min(0).max(100_000_000).optional(),
-  note: z.string().max(40).optional()
+  note: z.string().max(40).optional(),
+  arAccountId: uuid.optional(),
+  overridePin: z.string().regex(/^\d{4,6}$/).optional(),
+  /** Set when the signed-in manager is approving a credit limit. */
+  override: z.boolean().optional()
+})
+
+/** Several tenders for one check. The order itself is not divided. */
+export const splitPaySchema = z.object({
+  payments: z.array(paymentSchema).min(1).max(12)
 })
 
 export const refundSchema = z.object({
@@ -349,9 +370,11 @@ export type ReservationInput = z.infer<typeof reservationSchema>
 export type OrderCreateInput = z.infer<typeof orderCreateSchema>
 export type OrderPatchInput = z.infer<typeof orderPatchSchema>
 export type AddItemsInput = z.infer<typeof addItemsSchema>
+export type SendOrderInput = z.infer<typeof sendOrderSchema>
 export type SplitInput = z.infer<typeof splitSchema>
 export type DiscountInput = z.infer<typeof discountSchema>
 export type PaymentInput = z.infer<typeof paymentSchema>
+export type SplitPayInput = z.infer<typeof splitPaySchema>
 export type RefundInput = z.infer<typeof refundSchema>
 export type CategoryCreateInput = z.infer<typeof categoryCreateSchema>
 export type CategoryUpdateInput = z.infer<typeof categoryUpdateSchema>
@@ -366,3 +389,111 @@ export type SeatInput = z.infer<typeof seatSchema>
 export type QrOrderInput = z.infer<typeof qrOrderSchema>
 export type SyncOperationInput = z.infer<typeof syncOperationSchema>
 export type SyncPushInput = z.infer<typeof syncPushSchema>
+
+const calendarDay = z.string().regex(/^\d{4}-\d{2}-\d{2}$/)
+
+/**
+ * Read filters for the orders board.
+ * Status values here are query lenses over the stored check, service, and kitchen fields.
+ */
+export const orderListQuerySchema = z.object({
+  scope: z.enum(['active', 'past']).default('active'),
+  focus: z.enum(['all', 'new', 'preparing', 'ready', 'billing', 'completed', 'cancelled']).default('all'),
+  type: z.enum(ORDER_TYPES).optional(),
+  range: z.enum(['today', 'yesterday', 'week', 'month', 'custom']).optional(),
+  from: calendarDay.optional(),
+  to: calendarDay.optional(),
+  q: z.string().trim().max(80).optional(),
+  page: z.coerce.number().int().min(1).max(10_000).default(1),
+  pageSize: z.coerce.number().int().min(1).max(50).default(25)
+})
+
+export type OrderListQuery = z.infer<typeof orderListQuerySchema>
+
+const dayKey = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Choose a real date')
+
+export const arAccountCreateSchema = z
+  .object({
+    customerName: z.string().trim().min(1, 'Customer name is required').max(80),
+    companyName: z.string().trim().min(1, 'Company name is required').max(120),
+    contactPerson: z.string().trim().max(80).optional(),
+    phone: z.string().trim().max(40).optional(),
+    email: z.union([z.string().trim().email('Enter a valid email'), z.literal('')]).optional(),
+    address: z.string().trim().max(200).optional(),
+    creditLimitCents: z.number().int().min(0).max(100_000_000).nullable().optional(),
+    enforceCreditLimit: z.boolean().optional(),
+    paymentTerms: z.enum(AR_TERMS),
+    customTermDays: z.number().int().min(0).max(365).optional(),
+    notes: z.string().trim().max(500).optional()
+  })
+  .superRefine((input, ctx) => {
+    if (input.paymentTerms === 'CUSTOM' && input.customTermDays == null) {
+      ctx.addIssue({ code: 'custom', message: 'Enter the number of days', path: ['customTermDays'] })
+    }
+  })
+
+export const arAccountUpdateSchema = arAccountCreateSchema
+  .innerType()
+  .partial()
+  .extend({ status: z.enum(AR_ACCOUNT_STATUSES).optional() })
+  .refine((value) => Object.keys(value).length > 0, { message: 'Nothing to change' })
+
+export const arListQuerySchema = z.object({
+  q: z.string().trim().max(80).optional(),
+  status: z.enum(AR_ACCOUNT_STATUSES).optional(),
+  invoiceStatus: z.enum(AR_INVOICE_STATUSES).optional(),
+  accountId: uuid.optional(),
+  cashierId: uuid.optional(),
+  from: dayKey.optional(),
+  to: dayKey.optional(),
+  dueFrom: dayKey.optional(),
+  dueTo: dayKey.optional(),
+  overdue: z.enum(['1', '0']).optional(),
+  open: z.enum(['1']).optional(),
+  page: z.coerce.number().int().min(1).default(1),
+  pageSize: z.coerce.number().int().min(1).max(100).default(25)
+})
+
+const arAllocationSchema = z.object({
+  invoiceId: uuid,
+  amountCents: z.number().int().min(1).max(100_000_000)
+})
+
+export const arPaymentSchema = z.object({
+  id: uuid,
+  accountId: uuid,
+  amountCents: z.number().int().min(1).max(100_000_000),
+  method: z.enum(COLLECTION_METHODS),
+  reference: z.string().trim().max(40).optional(),
+  notes: z.string().trim().max(200).optional(),
+  allocations: z.array(arAllocationSchema).max(100).default([])
+})
+
+export const arApplySchema = z.object({
+  id: uuid,
+  allocations: z.array(arAllocationSchema).min(1).max(100)
+})
+
+export const arVoidSchema = z.object({
+  reason: z.string().trim().min(1, 'A reason is required').max(200)
+})
+
+export const arWriteOffSchema = z.object({
+  id: uuid,
+  amountCents: z.number().int().min(1).max(100_000_000),
+  reason: z.string().trim().min(1, 'A reason is required').max(200)
+})
+
+export const arStatementQuerySchema = z.object({
+  from: dayKey,
+  to: dayKey
+})
+
+export type ArAccountCreateInput = z.infer<typeof arAccountCreateSchema>
+export type ArAccountUpdateInput = z.infer<typeof arAccountUpdateSchema>
+export type ArListQuery = z.infer<typeof arListQuerySchema>
+export type ArPaymentInput = z.infer<typeof arPaymentSchema>
+export type ArApplyInput = z.infer<typeof arApplySchema>
+export type ArVoidInput = z.infer<typeof arVoidSchema>
+export type ArWriteOffInput = z.infer<typeof arWriteOffSchema>
+export type ArStatementQuery = z.infer<typeof arStatementQuerySchema>

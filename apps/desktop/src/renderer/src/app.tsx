@@ -5,6 +5,8 @@ import { ToastViewport } from '@/components/toast-viewport'
 import { LoginPage } from '@/features/auth/login-page'
 import { PinPage } from '@/features/auth/pin-page'
 import { RequireAuth } from '@/features/auth/require-auth'
+import { DashboardPage } from '@/features/dashboard/dashboard-page'
+import { KitchenGate } from '@/features/kitchen/kitchen-page'
 import { FloorPage } from '@/features/floor/floor-page'
 import { NewOrderPage } from '@/features/orders/new-order-page'
 import { OrderPage } from '@/features/orders/order-page'
@@ -13,6 +15,7 @@ import { MenuPage } from '@/features/menu/menu-page'
 import { ModifiersPage } from '@/features/modifiers/modifiers-page'
 import { GuestPage } from '@/features/qr/guest-page'
 import { ReportsPage } from '@/features/reports/reports-page'
+import { ArPage } from '@/features/ar/ar-page'
 import { ReservationsPage } from '@/features/reservations/reservations-page'
 import { SettingsPage } from '@/features/settings/settings-page'
 import { apiBase } from '@/lib/api'
@@ -21,7 +24,7 @@ import { loadStoredSession, useSession } from '@/stores/session-store'
 import { applyStoredTheme } from '@/stores/ui-store'
 import type { AuthSessionDto } from '@towns/shared'
 
-/** Cashiers open on Orders. Everyone else opens on the floor. */
+/** Cashiers open on Orders. Kitchen opens on the pass. Everyone else opens on the floor. */
 function HomeRedirect() {
   const user = useSession((state) => state.user)
   return <Navigate to={homePath(user?.role)} replace />
@@ -63,11 +66,14 @@ export function App() {
         <Route path="/pin" element={<PinPage />} />
         <Route path="/q/:token" element={<GuestPage />} />
         <Route element={<RequireAuth />}>
+          <Route path="/kitchen" element={<KitchenGate />} />
           <Route element={<Shell />}>
             <Route index element={<HomeRedirect />} />
+            <Route path="/dashboard" element={<DashboardPage />} />
             <Route path="/floor" element={<FloorPage />} />
             <Route path="/orders" element={<OrdersPage />} />
             <Route path="/reports" element={<ReportsPage />} />
+            <Route path="/ar" element={<ArPage />} />
             <Route path="/orders/new" element={<NewOrderPage />} />
             <Route path="/orders/:orderId" element={<OrderPage />} />
             <Route path="/reservations" element={<ReservationsPage />} />

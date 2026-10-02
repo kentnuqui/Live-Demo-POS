@@ -8,8 +8,18 @@ export const PERMISSIONS = [
   'orders.write',
   'orders.bill',
   'orders.kitchen',
+  'kitchen.display',
   'orders.read',
-  'reservations.write'
+  'reservations.write',
+  'ar.view',
+  'ar.manage',
+  'ar.sell',
+  'ar.collect',
+  'ar.void',
+  'ar.writeoff',
+  'ar.override',
+  'ar.reports',
+  'ar.export'
 ] as const
 
 export type Permission = (typeof PERMISSIONS)[number]
@@ -22,6 +32,7 @@ const GRANTS: Record<Permission, readonly UserRole[]> = {
   'orders.write': ['SUPER_ADMIN', 'ADMIN', 'RESTAURANT_MANAGER', 'CASHIER', 'WAITER'],
   'orders.bill': ['SUPER_ADMIN', 'ADMIN', 'RESTAURANT_MANAGER', 'CASHIER'],
   'orders.kitchen': ['SUPER_ADMIN', 'ADMIN', 'RESTAURANT_MANAGER', 'KITCHEN_STAFF', 'BARTENDER'],
+  'kitchen.display': ['RESTAURANT_MANAGER', 'KITCHEN_STAFF'],
   'orders.read': [
     'SUPER_ADMIN',
     'ADMIN',
@@ -32,7 +43,16 @@ const GRANTS: Record<Permission, readonly UserRole[]> = {
     'BARTENDER',
     'INVENTORY_STAFF'
   ],
-  'reservations.write': ['SUPER_ADMIN', 'ADMIN', 'RESTAURANT_MANAGER', 'CASHIER', 'WAITER']
+  'reservations.write': ['SUPER_ADMIN', 'ADMIN', 'RESTAURANT_MANAGER', 'CASHIER', 'WAITER'],
+  'ar.view': ['SUPER_ADMIN', 'ADMIN', 'RESTAURANT_MANAGER', 'CASHIER'],
+  'ar.manage': ['SUPER_ADMIN', 'ADMIN', 'RESTAURANT_MANAGER'],
+  'ar.sell': ['SUPER_ADMIN', 'ADMIN', 'RESTAURANT_MANAGER', 'CASHIER'],
+  'ar.collect': ['SUPER_ADMIN', 'ADMIN', 'RESTAURANT_MANAGER', 'CASHIER'],
+  'ar.void': ['SUPER_ADMIN', 'ADMIN', 'RESTAURANT_MANAGER'],
+  'ar.writeoff': ['SUPER_ADMIN', 'ADMIN', 'RESTAURANT_MANAGER'],
+  'ar.override': ['SUPER_ADMIN', 'ADMIN', 'RESTAURANT_MANAGER'],
+  'ar.reports': ['SUPER_ADMIN', 'ADMIN', 'RESTAURANT_MANAGER'],
+  'ar.export': ['SUPER_ADMIN', 'ADMIN', 'RESTAURANT_MANAGER']
 }
 
 /** Returns whether a role may perform the action. */

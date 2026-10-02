@@ -11,16 +11,28 @@ export function useBranchSocket(branchId: string | null): void {
 
   useEffect(() => {
     if (!branchId || !token) return
-    const socket = io(apiBase, { auth: { token } })
-    socket.emit('branch:join', branchId)
+    const socket = io(apiBase, { auth: { token }, reconnection: true })
     const refreshFloor = () => void queryClient.invalidateQueries({ queryKey: ['floor', branchId] })
     const refreshOrders = () => void queryClient.invalidateQueries({ queryKey: ['orders', branchId] })
+    socket.on('connect', () => {
+      socket.emit('branch:join', branchId)
+      refreshOrders()
+    })
     socket.on('floor.updated', refreshFloor)
     socket.on('order.updated', (payload: { orderId?: string }) => {
       refreshFloor()
       refreshOrders()
       if (payload?.orderId) void queryClient.invalidateQueries({ queryKey: ['order', payload.orderId] })
     })
+    const refreshOrderEvent = (payload: { orderId?: string }) => {
+      refreshFloor()
+      refreshOrders()
+      if (payload?.orderId) void queryClient.invalidateQueries({ queryKey: ['order', payload.orderId] })
+      void queryClient.invalidateQueries({ queryKey: ['kitchen', branchId] })
+    }
+    socket.on('order.sent', refreshOrderEvent)
+    socket.on('order.items.added', refreshOrderEvent)
+    socket.on('order.items.cancelled', refreshOrderEvent)
     socket.on('reservation.updated', () => {
       refreshFloor()
       void queryClient.invalidateQueries({ queryKey: ['reservations', branchId] })

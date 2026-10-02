@@ -6,10 +6,12 @@ import * as branches from '../controllers/branch.controller.js'
 import * as floor from '../controllers/floor.controller.js'
 import * as menu from '../controllers/menu.controller.js'
 import * as service from '../controllers/service.controller.js'
+import * as kitchen from '../controllers/kitchen.controller.js'
 import * as orders from '../controllers/order.controller.js'
 import * as sync from '../controllers/sync.controller.js'
 import * as qr from '../controllers/qr.controller.js'
 import * as reports from '../controllers/report.controller.js'
+import * as ar from '../controllers/ar.controller.js'
 
 export const api = Router()
 
@@ -72,9 +74,28 @@ branch.get('/reservations', requirePermission('orders.read'), service.listReserv
 branch.post('/reservations', requirePermission('reservations.write'), service.createReservation)
 branch.post('/reservations/:reservationId/seat', requirePermission('reservations.write'), service.seatReservation)
 branch.post('/reservations/:reservationId/cancel', requirePermission('reservations.write'), service.cancelReservation)
+branch.get('/kitchen', requirePermission('kitchen.display'), kitchen.board)
+branch.post('/kitchen/:orderId/status', requirePermission('kitchen.display'), kitchen.advance)
 branch.get('/orders', requirePermission('orders.read'), orders.list)
 branch.post('/orders', requirePermission('orders.write'), orders.create)
 branch.get('/reports/daily', requirePermission('orders.bill'), reports.daily)
+branch.get('/ar/summary', requirePermission('ar.view'), ar.summary)
+branch.get('/ar/accounts', requirePermission('ar.view'), ar.listAccounts)
+branch.post('/ar/accounts', requirePermission('ar.manage'), ar.createAccount)
+branch.get('/ar/accounts/:accountId', requirePermission('ar.view'), ar.showAccount)
+branch.patch('/ar/accounts/:accountId', requirePermission('ar.manage'), ar.updateAccount)
+branch.get('/ar/accounts/:accountId/ledger', requirePermission('ar.view'), ar.ledger)
+branch.get('/ar/accounts/:accountId/statement', requirePermission('ar.view'), ar.statement)
+branch.get('/ar/invoices', requirePermission('ar.view'), ar.listInvoices)
+branch.get('/ar/invoices/:invoiceId', requirePermission('ar.view'), ar.showInvoice)
+branch.post('/ar/invoices/:invoiceId/void', requirePermission('ar.void'), ar.voidInvoice)
+branch.post('/ar/invoices/:invoiceId/write-off', requirePermission('ar.writeoff'), ar.writeOff)
+branch.get('/ar/payments', requirePermission('ar.view'), ar.listPayments)
+branch.post('/ar/payments', requirePermission('ar.collect'), ar.createPayment)
+branch.post('/ar/payments/:paymentId/apply', requirePermission('ar.collect'), ar.applyPayment)
+branch.get('/ar/reports/outstanding', requirePermission('ar.reports'), ar.outstanding)
+branch.get('/ar/reports/collections', requirePermission('ar.reports'), ar.collections)
+branch.get('/ar/reports/sales', requirePermission('ar.reports'), ar.creditSales)
 
 api.use('/branches/:branchId', branch)
 
@@ -91,6 +112,7 @@ api.post('/orders/:orderId/split', requirePermission('orders.write'), orders.spl
 api.post('/orders/:orderId/bill', requirePermission('orders.bill'), orders.bill)
 api.post('/orders/:orderId/discount', requirePermission('orders.bill'), orders.discount)
 api.post('/orders/:orderId/pay', requirePermission('orders.bill'), orders.pay)
+api.post('/orders/:orderId/pay-split', requirePermission('orders.bill'), orders.paySplit)
 api.post('/orders/:orderId/refund', requirePermission('orders.bill'), orders.refund)
 api.post('/orders/:orderId/finish', requirePermission('orders.bill'), orders.finish)
 

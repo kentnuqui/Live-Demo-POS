@@ -181,7 +181,7 @@ export function ModifierSelectionDialog({
                   <div>
                     <h3 className="font-serif text-lg leading-tight">
                       {group.name}
-                      {group.isRequired && <span className="ml-1 text-red-500">*</span>}
+                      {group.isRequired ? <span className="ml-1 text-accent">Required</span> : null}
                     </h3>
                     {group.description && (
                       <p className="text-sm text-muted-foreground">{group.description}</p>
@@ -191,9 +191,7 @@ export function ModifierSelectionDialog({
                     {group.isMultipleSelect ? (
                       <>
                         {groupSelections.size} of {group.maxSelections} selected
-                        {groupSelections.size >= group.maxSelections && (
-                          <div className="text-orange-600 font-medium">Maximum reached</div>
-                        )}
+                        {groupSelections.size >= group.maxSelections ? <div>Maximum reached</div> : null}
                       </>
                     ) : (
                       <>Choose one</>
@@ -201,9 +199,7 @@ export function ModifierSelectionDialog({
                   </div>
                 </div>
                 
-                {error && (
-                  <p className="text-sm text-red-600">{error}</p>
-                )}
+                {error ? <p className="text-sm text-accent">{error}</p> : null}
                 
                 <div className="grid gap-2 sm:grid-cols-2">
                   {group.options.map(option => {
@@ -223,11 +219,9 @@ export function ModifierSelectionDialog({
                           handleOptionToggle(group.id, option.id)
                         }}
                         className={cn(
-                          'flex items-center justify-between rounded-lg border p-3 text-left transition-colors',
-                          isSelected
-                            ? 'border-primary bg-primary/5 text-primary'
-                            : 'border-border hover:bg-muted',
-                          !canSelect && !isSelected && 'cursor-not-allowed opacity-50'
+                          'flex min-h-14 items-center justify-between rounded-xl border p-3 text-left',
+                          isSelected ? 'border-primary bg-muted' : 'bg-card hover:bg-muted',
+                          !canSelect && !isSelected && 'cursor-not-allowed opacity-40'
                         )}
                       >
                         <div>
@@ -242,14 +236,9 @@ export function ModifierSelectionDialog({
                           {option.priceCents > 0 && (
                             <span className="num font-serif text-lg">+{formatMoney(option.priceCents, currency)}</span>
                           )}
-                          {option.priceCents < 0 && (
-                            <span className="num font-serif text-lg text-green-600">
-                              {formatMoney(option.priceCents, currency)}
-                            </span>
-                          )}
-                          {isSelected && (
-                            <div className="mt-1 h-2 w-2 rounded-full bg-primary"></div>
-                          )}
+                          {option.priceCents < 0 ? (
+                            <span className="num font-serif text-lg">{formatMoney(option.priceCents, currency)}</span>
+                          ) : null}
                         </div>
                       </button>
                     )

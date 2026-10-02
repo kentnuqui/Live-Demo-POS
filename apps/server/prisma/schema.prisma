@@ -99,6 +99,29 @@ enum OrderStatus {
   @@map("order_status")
 }
 
+enum KitchenStatus {
+  NEW
+  PREPARING
+  READY
+  COMPLETED
+
+  @@map("kitchen_order_status")
+}
+
+enum KitchenSubmissionKind {
+  INITIAL
+  ADDITION
+
+  @@map("kitchen_submission_kind")
+}
+
+enum ServiceStatus {
+  PREPARING
+  READY_TO_SERVE
+
+  @@map("service_status")
+}
+
 enum DiningProgress {
   SEATED
   ORDERED
@@ -130,8 +153,51 @@ enum PaymentMethod {
   CASH
   CARD
   OTHER
+  ACCOUNT
 
   @@map("payment_method")
+}
+
+enum ArAccountStatus {
+  ACTIVE
+  INACTIVE
+  SUSPENDED
+  CLOSED
+
+  @@map("ar_account_status")
+}
+
+enum ArTerms {
+  DUE_IMMEDIATELY
+  NET_7
+  NET_15
+  NET_30
+  NET_45
+  NET_60
+  CUSTOM
+
+  @@map("ar_terms")
+}
+
+enum ArInvoiceStatus {
+  OPEN
+  PARTIALLY_PAID
+  PAID
+  OVERDUE
+  VOIDED
+  WRITTEN_OFF
+
+  @@map("ar_invoice_status")
+}
+
+enum ArLedgerKind {
+  INVOICE
+  PAYMENT
+  REFUND
+  VOID
+  WRITE_OFF
+
+  @@map("ar_ledger_kind")
 }
 
 enum MenuStation {
@@ -199,6 +265,13 @@ model Branch {
   modifierGroups ModifierGroup[]
   qrTokens       QrToken[]
   tombstones     Tombstone[]
+  arAccounts     ArAccount[]
+  arInvoices     ArInvoice[]
+  arPayments     ArPayment[]
+  arAuditLogs    ArAuditLog[]
+  arSequences    ArSequence[]
+  kitchenSubmissions KitchenSubmission[]
+  orderEvents    OrderEvent[]
 
   @@map("branches")
 }
@@ -218,9 +291,20 @@ model User {
 
   branch        Branch?        @relation(fields: [branchId], references: [id], onDelete: SetNull, onUpdate: Cascade)
   refreshTokens RefreshToken[]
-  orders        Order[]        @relation("ServerOrders")
-  payments      Payment[]      @relation("CashierPayments")
-  refunds       Refund[]       @relation("CashierRefunds")
+  orders           Order[]        @relation("ServerOrders")
+  payments         Payment[]      @relation("CashierPayments")
+  refunds          Refund[]       @relation("CashierRefunds")
+  arAccountsOpened ArAccount[]    @relation("ArAccountCreatedBy")
+  arAccountsEdited ArAccount[]    @relation("ArAccountUpdatedBy")
+  arInvoices       ArInvoice[]    @relation("ArInvoiceCashier")
+  arInvoiceVoids   ArInvoice[]    @relation("ArInvoiceVoidedBy")
+  arCollections    ArPayment[]    @relation("ArPaymentCashier")
+  arWriteOffs      ArWriteOff[]
+  arLedgerEntries  ArLedgerEntry[] @relation("ArLedgerUser")
+  arAuditLogs      ArAuditLog[]   @relation("ArAuditUser")
+  arAuditApprovals ArAuditLog[]   @relation("ArAuditApprover")
+  kitchenSubmissions KitchenSubmission[] @relation("KitchenSentBy")
+  orderEvents        OrderEvent[]        @relation("OrderEventActor")
 
   @@index([branchId])
   @@map("users")
@@ -449,17 +533,30 @@ model Order {
   mergedIntoId       String?        @map("merged_into_id")
   splitFromId        String?        @map("split_from_id")
   closedAt           DateTime?      @map("closed_at")
+  /// Floor state written by the pass. Billing and payment do not clear it.
+  serviceStatus      ServiceStatus? @map("service_status")
+  /// Pass state. Billing and payment keep using `status` and do not clear a ticket.
+  kitchenStatus      KitchenStatus? @map("kitchen_status")
+  kitchenStartedAt   DateTime?      @map("kitchen_started_at")
+  kitchenCompletedAt DateTime?      @map("kitchen_completed_at")
+  /// Stable pass number, assigned the first time the check is fired.
+  ticketNumber       Int?           @map("ticket_number")
   createdAt          DateTime       @default(now()) @map("created_at")
   updatedAt          DateTime       @updatedAt @map("updated_at")
 
   branch Branch       @relation(fields: [branchId], references: [id], onDelete: Cascade, onUpdate: Cascade)
   table  DiningTable? @relation(fields: [tableId], references: [id], onDelete: SetNull, onUpdate: Cascade)
   server User?        @relation("ServerOrders", fields: [serverId], references: [id], onDelete: SetNull, onUpdate: Cascade)
-  items    OrderItem[]
-  payments Payment[]
-  refunds  Refund[]
+  items     OrderItem[]
+  payments  Payment[]
+  refunds   Refund[]
+  arInvoice ArInvoice?
+  submissions KitchenSubmission[]
+  orderEvents OrderEvent[]
 
+  @@unique([branchId, ticketNumber])
   @@index([branchId, status])
+  @@index([branchId, kitchenStatus])
   @@index([branchId, closedAt])
   @@index([tableId])
   @@index([updatedAt])
@@ -484,6 +581,7 @@ model OrderItem {
   order     Order               @relation(fields: [orderId], references: [id], onDelete: Cascade, onUpdate: Cascade)
   menuItem  MenuItem?           @relation(fields: [menuItemId], references: [id], onDelete: SetNull, onUpdate: Cascade)
   modifiers OrderItemModifier[]
+  submissionItems KitchenSubmissionItem[]
 
   @@index([orderId])
   @@map("order_items")
@@ -500,8 +598,9 @@ model Payment {
   cashierId     String?       @map("cashier_id")
   createdAt     DateTime      @default(now()) @map("created_at")
 
-  order   Order @relation(fields: [orderId], references: [id], onDelete: Cascade, onUpdate: Cascade)
-  cashier User? @relation("CashierPayments", fields: [cashierId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  order     Order      @relation(fields: [orderId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  cashier   User?      @relation("CashierPayments", fields: [cashierId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  arInvoice ArInvoice?
 
   @@index([orderId])
   @@index([createdAt])
@@ -623,4 +722,288 @@ model OrderItemModifier {
 
   @@index([orderItemId])
   @@map("order_item_modifiers")
+}
+
+/// One firing of a check. Additions keep the order number and store only the new quantities.
+model KitchenSubmission {
+  id             String                 @id
+  orderId        String                 @map("order_id")
+  branchId       String                 @map("branch_id")
+  sequence       Int
+  kind           KitchenSubmissionKind
+  kitchenStatus  KitchenStatus          @default(NEW) @map("kitchen_status")
+  startedAt      DateTime               @map("started_at")
+  completedAt    DateTime?              @map("completed_at")
+  sentById       String?                @map("sent_by_id")
+  /// Same key on a retry returns the firing that already committed.
+  idempotencyKey String?                @unique @map("idempotency_key")
+  createdAt      DateTime               @default(now()) @map("created_at")
+
+  order   Order                     @relation(fields: [orderId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  branch  Branch                    @relation(fields: [branchId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  sentBy  User?                     @relation("KitchenSentBy", fields: [sentById], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  items   KitchenSubmissionItem[]
+
+  @@unique([orderId, sequence])
+  @@index([branchId, kitchenStatus])
+  @@index([orderId])
+  @@map("kitchen_submissions")
+}
+
+/// Snapshot of what this firing asked the kitchen to cook. Later edits do not rewrite it.
+model KitchenSubmissionItem {
+  id                 String      @id
+  submissionId       String      @map("submission_id")
+  /// Cleared if the check line is collapsed. The snapshot above stays on the ticket.
+  orderItemId        String?     @map("order_item_id")
+  name               String
+  quantity           Int
+  notes              String      @default("")
+  station            MenuStation @default(KITCHEN)
+  cancelledQuantity  Int         @default(0) @map("cancelled_quantity")
+  createdAt          DateTime    @default(now()) @map("created_at")
+
+  submission KitchenSubmission           @relation(fields: [submissionId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  orderItem  OrderItem?                  @relation(fields: [orderItemId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  modifiers  KitchenSubmissionModifier[]
+
+  @@index([submissionId])
+  @@index([orderItemId])
+  @@map("kitchen_submission_items")
+}
+
+model KitchenSubmissionModifier {
+  id         String   @id
+  itemId     String   @map("item_id")
+  name       String
+  priceCents Int      @default(0) @map("price_cents")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  item KitchenSubmissionItem @relation(fields: [itemId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+
+  @@index([itemId])
+  @@map("kitchen_submission_modifiers")
+}
+
+/// Who fired, added, or cancelled kitchen quantities. Kept for disputes.
+model OrderEvent {
+  id        String   @id
+  orderId   String   @map("order_id")
+  branchId  String   @map("branch_id")
+  kind      String
+  actorId   String?  @map("actor_id")
+  summary   String
+  createdAt DateTime @default(now()) @map("created_at")
+
+  order  Order  @relation(fields: [orderId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  branch Branch @relation(fields: [branchId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  actor  User?  @relation("OrderEventActor", fields: [actorId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+
+  @@index([orderId, createdAt])
+  @@map("order_events")
+}
+
+/// A house account that may buy on credit. Balance is the ledger, cached here inside the same transaction.
+model ArAccount {
+  id                 String          @id @default(uuid())
+  branchId           String          @map("branch_id")
+  accountNumber      String          @map("account_number")
+  customerName       String          @map("customer_name")
+  companyName        String          @map("company_name")
+  contactPerson      String          @default("") @map("contact_person")
+  phone              String          @default("")
+  email              String          @default("")
+  address            String          @default("")
+  creditLimitCents   Int?            @map("credit_limit_cents")
+  enforceCreditLimit Boolean         @default(true) @map("enforce_credit_limit")
+  paymentTerms       ArTerms         @default(NET_30) @map("payment_terms")
+  customTermDays     Int             @default(0) @map("custom_term_days")
+  status             ArAccountStatus @default(ACTIVE)
+  notes              String          @default("")
+  balanceCents       Int             @default(0) @map("balance_cents")
+  createdById        String?         @map("created_by_id")
+  updatedById        String?         @map("updated_by_id")
+  createdAt          DateTime        @default(now()) @map("created_at")
+  updatedAt          DateTime        @updatedAt @map("updated_at")
+
+  branch    Branch          @relation(fields: [branchId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  createdBy User?           @relation("ArAccountCreatedBy", fields: [createdById], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  updatedBy User?           @relation("ArAccountUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  invoices  ArInvoice[]
+  payments  ArPayment[]
+  ledger    ArLedgerEntry[]
+  writeOffs ArWriteOff[]
+  audits    ArAuditLog[]
+
+  @@unique([branchId, accountNumber])
+  @@index([branchId, status])
+  @@index([branchId, companyName])
+  @@map("ar_accounts")
+}
+
+/// One credit sale. The check stays in `orders`; this row is what the customer still owes.
+model ArInvoice {
+  id               String          @id @default(uuid())
+  branchId         String          @map("branch_id")
+  accountId        String          @map("account_id")
+  orderId          String          @unique @map("order_id")
+  paymentId        String          @unique @map("payment_id")
+  invoiceNumber    String          @map("invoice_number")
+  cashierId        String?         @map("cashier_id")
+  originalCents    Int             @map("original_cents")
+  paidCents        Int             @default(0) @map("paid_cents")
+  refundedCents    Int             @default(0) @map("refunded_cents")
+  writtenOffCents  Int             @default(0) @map("written_off_cents")
+  remainingCents   Int             @map("remaining_cents")
+  invoiceOn        String          @map("invoice_on") @db.VarChar(10)
+  dueOn            String          @map("due_on") @db.VarChar(10)
+  terms            ArTerms
+  termDays         Int             @map("term_days")
+  status           ArInvoiceStatus @default(OPEN)
+  notes            String          @default("")
+  voidedAt         DateTime?       @map("voided_at")
+  voidedById       String?         @map("voided_by_id")
+  voidReason       String          @default("") @map("void_reason")
+  createdAt        DateTime        @default(now()) @map("created_at")
+  updatedAt        DateTime        @updatedAt @map("updated_at")
+
+  branch      Branch         @relation(fields: [branchId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  account     ArAccount      @relation(fields: [accountId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  order       Order          @relation(fields: [orderId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  payment     Payment        @relation(fields: [paymentId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  cashier     User?          @relation("ArInvoiceCashier", fields: [cashierId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  voidedBy    User?          @relation("ArInvoiceVoidedBy", fields: [voidedById], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  allocations ArAllocation[]
+  ledger      ArLedgerEntry[]
+  writeOffs   ArWriteOff[]
+
+  @@unique([branchId, invoiceNumber])
+  @@index([accountId, status])
+  @@index([branchId, dueOn])
+  @@index([branchId, invoiceOn])
+  @@index([cashierId])
+  @@map("ar_invoices")
+}
+
+/// Cash, card, or other money received against an account. This is not a new sale.
+model ArPayment {
+  id             String        @id
+  branchId       String        @map("branch_id")
+  accountId      String        @map("account_id")
+  method         PaymentMethod
+  amountCents    Int           @map("amount_cents")
+  appliedCents   Int           @default(0) @map("applied_cents")
+  unappliedCents Int           @default(0) @map("unapplied_cents")
+  refundedCents  Int           @default(0) @map("refunded_cents")
+  reference      String
+  notes          String        @default("")
+  cashierId      String?       @map("cashier_id")
+  createdAt      DateTime      @default(now()) @map("created_at")
+
+  branch      Branch         @relation(fields: [branchId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  account     ArAccount      @relation(fields: [accountId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  cashier     User?          @relation("ArPaymentCashier", fields: [cashierId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  allocations ArAllocation[]
+
+  @@index([branchId, createdAt])
+  @@index([accountId, createdAt])
+  @@map("ar_payments")
+}
+
+model ArAllocation {
+  id          String   @id @default(uuid())
+  paymentId   String   @map("payment_id")
+  invoiceId   String   @map("invoice_id")
+  amountCents Int      @map("amount_cents")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  payment ArPayment @relation(fields: [paymentId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  invoice ArInvoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+
+  @@unique([paymentId, invoiceId])
+  @@index([invoiceId])
+  @@map("ar_allocations")
+}
+
+model ArLedgerEntry {
+  id           String       @id @default(uuid())
+  branchId     String       @map("branch_id")
+  accountId    String       @map("account_id")
+  invoiceId    String?      @map("invoice_id")
+  paymentId    String?      @map("payment_id")
+  kind         ArLedgerKind
+  debitCents   Int          @default(0) @map("debit_cents")
+  creditCents  Int          @default(0) @map("credit_cents")
+  balanceCents Int          @map("balance_cents")
+  reference    String
+  description  String
+  createdById  String?      @map("created_by_id")
+  createdAt    DateTime     @default(now()) @map("created_at")
+
+  account   ArAccount  @relation(fields: [accountId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  invoice   ArInvoice? @relation(fields: [invoiceId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  createdBy User?      @relation("ArLedgerUser", fields: [createdById], references: [id], onDelete: SetNull, onUpdate: Cascade)
+
+  @@index([accountId, createdAt])
+  @@index([branchId, createdAt])
+  @@index([invoiceId])
+  @@map("ar_ledger_entries")
+}
+
+model ArWriteOff {
+  id          String   @id
+  branchId    String   @map("branch_id")
+  accountId   String   @map("account_id")
+  invoiceId   String   @map("invoice_id")
+  amountCents Int      @map("amount_cents")
+  reason      String
+  userId      String?  @map("user_id")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  account ArAccount @relation(fields: [accountId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  invoice ArInvoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  user    User?     @relation(fields: [userId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+
+  @@index([invoiceId])
+  @@index([accountId])
+  @@map("ar_write_offs")
+}
+
+model ArAuditLog {
+  id            String   @id @default(uuid())
+  branchId      String   @map("branch_id")
+  accountId     String?  @map("account_id")
+  invoiceId     String?  @map("invoice_id")
+  paymentId     String?  @map("payment_id")
+  action        String
+  message       String
+  userId        String?  @map("user_id")
+  approverId    String?  @map("approver_id")
+  amountCents   Int?     @map("amount_cents")
+  previousValue String   @default("") @map("previous_value")
+  newValue      String   @default("") @map("new_value")
+  reason        String   @default("")
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  branch   Branch     @relation(fields: [branchId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  account  ArAccount? @relation(fields: [accountId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  user     User?      @relation("ArAuditUser", fields: [userId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  approver User?      @relation("ArAuditApprover", fields: [approverId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+
+  @@index([branchId, createdAt])
+  @@index([accountId, createdAt])
+  @@index([invoiceId])
+  @@map("ar_audit_logs")
+}
+
+/// Per-branch counters for account, invoice, and payment numbers.
+model ArSequence {
+  branchId String @map("branch_id")
+  kind     String
+  value    Int
+
+  branch Branch @relation(fields: [branchId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+
+  @@id([branchId, kind])
+  @@map("ar_sequences")
 }

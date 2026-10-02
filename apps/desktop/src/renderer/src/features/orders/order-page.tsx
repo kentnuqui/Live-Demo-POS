@@ -2,39 +2,34 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   formatMoney,
   hasPermission,
+  kitchenSendMessage,
   ORDER_TYPE_LABEL,
+  orderServiceLabel,
+  PAYMENT_METHOD_LABEL,
   type MenuCategoryDto,
   type MenuStation,
   type OrderDto,
+  type PaymentInput,
   type PaymentMethod,
   type PrinterDto,
   type PrinterKind,
   type MenuItemDto
 } from '@towns/shared'
-import { ArrowLeft } from 'lucide-react'
+import { ArrowLeft, Minus, MoreHorizontal, Plus, X } from 'lucide-react'
 import { useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
-import { api } from '@/lib/api'
+import { ApiError, api, isNetworkError } from '@/lib/api'
 import { homePath } from '@/lib/nav'
 import { cn } from '@/lib/utils'
 import { cached } from '@/features/sync/cache'
 import { useSession } from '@/stores/session-store'
 import { useToasts } from '@/stores/toast-store'
-import { DiscountDialog, PayDialog, RefundDialog } from './cashier-dialogs'
+import { DiscountDialog, PayDialog, RefundDialog, clearSplitDrafts } from './cashier-dialogs'
 import { discountName, guestReceipt, openCashDrawer, printGuestReceipt } from './print-receipt'
 import { ModifierSelectionDialog } from './modifier-selection'
-
-const WASH: Record<string, string> = {
-  Sushi: 'from-stone-200/80',
-  Ramen: 'from-amber-100/70',
-  Donburi: 'from-orange-50',
-  Tempura: 'from-yellow-50',
-  Drinks: 'from-slate-200/70',
-  Desserts: 'from-rose-50'
-}
 
 const STATION_PRINTER: Record<MenuStation, PrinterKind> = {
   KITCHEN: 'KITCHEN',
@@ -53,6 +48,7 @@ export function OrderPage() {
   const [categoryId, setCategoryId] = useState('all')
   const [dialog, setDialog] = useState<'actions' | 'transfer' | 'merge' | 'split' | 'receipt' | 'pay' | 'discount' | 'refund' | 'seat' | null>(null)
   const [picked, setPicked] = useState<string[]>([])
+  const [cancelAsk, setCancelAsk] = useState<null | { title: string; detail: string; confirm: string; run: () => void }>(null)
   const [modifierDialog, setModifierDialog] = useState<{ isOpen: boolean; item: MenuItemDto | null }>({ 
     isOpen: false, 
     item: null 
@@ -104,6 +100,8 @@ export function OrderPage() {
   }
 
   const addQueue = useRef(Promise.resolve())
+  const sendKey = useRef<string | null>(null)
+  const sendLock = useRef(false)
   const add = useMutation({
     mutationFn: ({ menuItemId, modifiers }: { menuItemId: string; modifiers?: Array<{ modifierGroupId: string; modifierOptionId: string }> }) => {
       const run = addQueue.current.then(() => api.addItems(orderId, { 
@@ -146,15 +144,30 @@ export function OrderPage() {
     }
   }
   const adjust = useMutation({
-    mutationFn: (itemId: string) => api.adjustItem(orderId, itemId, -1),
-    onSuccess: refresh
+    mutationFn: ({ itemId, delta, confirmCancel }: { itemId: string; delta: number; confirmCancel?: boolean }) =>
+      api.adjustItem(orderId, itemId, delta, confirmCancel),
+    onSuccess: refresh,
+    onError: tell
   })
   const send = useMutation({
-    mutationFn: () => api.send(orderId),
+    mutationFn: () => {
+      if (!sendKey.current) sendKey.current = crypto.randomUUID()
+      return api.send(orderId, sendKey.current)
+    },
     onSuccess: async (result) => {
+      sendKey.current = null
       refresh(result.order)
       await routeTickets(result.tickets, printers.data ?? [])
-      useToasts.getState().push(result.tickets.length ? 'Sent' : 'Nothing new')
+      useToasts.getState().push(kitchenSendMessage(result.sentCount))
+    },
+    onError: (error) => {
+      const lost = isNetworkError(error) || (error instanceof ApiError && error.status >= 500)
+      if (!lost) sendKey.current = null
+      if (lost) {
+        useToasts.getState().push('Unable to send new items to kitchen.')
+        return
+      }
+      tell(error)
     }
   })
   const closeCheck = useMutation({
@@ -175,9 +188,17 @@ export function OrderPage() {
     onError: tell
   })
   const pay = useMutation({
-    mutationFn: (body: { method: PaymentMethod; amountCents?: number; tenderedCents?: number; note?: string }) =>
-      api.pay(orderId, { ...body, id: crypto.randomUUID() }),
+    mutationFn: (body: {
+      method: PaymentMethod
+      amountCents?: number
+      tenderedCents?: number
+      note?: string
+      arAccountId?: string
+      overridePin?: string
+      override?: boolean
+    }) => api.pay(orderId, { ...body, id: crypto.randomUUID() }),
     onSuccess: async (next, body) => {
+      clearSplitDrafts(orderId)
       refresh(next)
       if (body.method === 'CASH') void openCashDrawer(printers.data ?? [])
       if (next.status === 'COMPLETED') {
@@ -187,7 +208,32 @@ export function OrderPage() {
         useToasts.getState().push('Payment saved')
       }
     },
-    onError: tell
+    onError: (error, body) => {
+      void queryClient.invalidateQueries({ queryKey: ['order', orderId] })
+      if (isNetworkError(error)) {
+        useToasts.getState().push(
+          body.method === 'ACCOUNT'
+            ? 'Connection lost. The transaction was not confirmed. Please verify the transaction before trying again.'
+            : 'Transaction could not be completed. Please try again.'
+        )
+        return
+      }
+      tell(error)
+    }
+  })
+  const splitPay = useMutation({
+    mutationFn: (payments: PaymentInput[]) => api.paySplit(orderId, payments),
+    onSuccess: async (next, payments) => {
+      clearSplitDrafts(orderId)
+      refresh(next)
+      if (payments.some((payment) => payment.method === 'CASH')) void openCashDrawer(printers.data ?? [])
+      setDialog(null)
+      await handReceipt(next, 'Paid')
+    },
+    onError: (error) => {
+      void queryClient.invalidateQueries({ queryKey: ['order', orderId] })
+      useToasts.getState().push(splitFailure(error))
+    }
   })
   const refund = useMutation({
     mutationFn: (body: { method: PaymentMethod; amountCents: number; reason: string }) =>
@@ -221,13 +267,14 @@ export function OrderPage() {
     }
   })
   const voidLines = useMutation({
-    mutationFn: async (ids: string[]) => {
+    mutationFn: async ({ ids, confirmCancel }: { ids: string[]; confirmCancel?: boolean }) => {
       let latest: OrderDto | null = null
-      for (const id of ids) latest = await api.voidItem(orderId, id)
+      for (const id of ids) latest = await api.voidItem(orderId, id, confirmCancel)
       if (!latest) throw new Error('Nothing to void')
       return latest
     },
-    onSuccess: refresh
+    onSuccess: refresh,
+    onError: tell
   })
   const service = useMutation({
     mutationFn: (body: { type: 'DINE_IN' | 'TAKEOUT'; tableId?: string; guestName?: string }) => api.patchOrder(orderId, body),
@@ -261,7 +308,8 @@ export function OrderPage() {
 
   const currency = current.currency || settings.data?.currency || 'USD'
   const closed = current.status === 'COMPLETED' || current.status === 'CANCELLED'
-  const alreadySent = current.status !== 'OPEN'
+  const unsentCount = lines.reduce((sum, line) => sum + line.unsent, 0)
+  const canSend = canWrite && !closed && current.status !== 'BILLING' && unsentCount > 0
   const tables = floor.data?.[0]?.tables.filter((table) => table.status === 'AVAILABLE') ?? []
   const siblings = (orders.data ?? []).filter((item) => item.id !== current.id && item.status !== 'COMPLETED' && item.status !== 'CANCELLED')
 
@@ -287,9 +335,59 @@ export function OrderPage() {
     }
   }
 
+  function askCancel(title: string, detail: string, confirm: string, run: () => void) {
+    setCancelAsk({ title, detail, confirm, run })
+  }
+
+  function changeQuantity(line: TicketLine, delta: number) {
+    const itemId = line.ids[line.ids.length - 1]
+    if (!itemId) return
+    const next = line.quantity + delta
+    if (next < line.firedQuantity) {
+      const dropping = line.firedQuantity - Math.max(next, 0)
+      askCancel(
+        next <= 0 ? 'Remove sent item?' : 'Cancel sent quantity?',
+        next <= 0
+          ? `${line.name} was already sent to the kitchen.`
+          : `Cancel ${dropping} ${line.name} already sent to the kitchen? The kitchen will not cook a negative.`,
+        next <= 0 ? 'Remove from check' : 'Cancel sent quantity',
+        () => adjust.mutate({ itemId, delta, confirmCancel: true })
+      )
+      return
+    }
+    adjust.mutate({ itemId, delta })
+  }
+
+  function removeLine(line: TicketLine) {
+    if (line.firedQuantity > 0) {
+      askCancel(
+        'Remove sent item?',
+        `${line.name} was already sent to the kitchen.`,
+        'Remove from check',
+        () => voidLines.mutate({ ids: line.ids, confirmCancel: true })
+      )
+      return
+    }
+    voidLines.mutate({ ids: line.ids })
+  }
+
+  function fireKitchen() {
+    if (sendLock.current || send.isPending) return
+    sendLock.current = true
+    send.mutate(undefined, {
+      onSettled: () => {
+        sendLock.current = false
+      }
+    })
+  }
+
+  const showBreakdown = current.discountCents > 0 || current.serviceChargeCents > 0 || current.paidCents > 0 || current.refundedCents > 0
+  const dueLabel = current.paidCents > 0 && !closed ? 'Balance' : 'Total'
+  const dueCents = current.paidCents > 0 && !closed ? current.balanceCents : current.totalCents
+
   return (
-    <div className="grid h-full min-h-0 grid-cols-[minmax(0,1fr)_380px] grid-rows-[minmax(0,1fr)] overflow-hidden">
-      <section className="flex min-h-0 min-w-0 flex-col overflow-hidden">
+    <div className="flex h-full min-h-0 flex-col overflow-hidden md:grid md:grid-cols-[minmax(0,1fr)_340px] xl:grid-cols-[minmax(0,1fr)_380px]">
+      <section className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
         <div className="flex shrink-0 items-center gap-3 px-5 py-3">
           <button type="button" onClick={() => navigate(homePath(user?.role))} className="rounded-xl p-2 hover:bg-muted" aria-label={user?.role === 'CASHIER' ? 'Back to orders' : 'Back to tables'}>
             <ArrowLeft className="h-5 w-5" />
@@ -297,7 +395,7 @@ export function OrderPage() {
           <div className="min-w-0">
             <div className="truncate font-serif text-3xl leading-none">{checkHeading(current)}</div>
             <div className="mt-1 truncate text-xs uppercase tracking-[0.16em] text-muted-foreground">
-              {labelFor(current.type)} · {current.progress.toLowerCase()}
+              {labelFor(current.type)} · {orderServiceLabel(current)}
             </div>
           </div>
           <Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search the menu" className="ml-auto min-w-36 max-w-xs" />
@@ -333,127 +431,61 @@ export function OrderPage() {
             </button>
           ))}
         </div>
-        <div className="grid min-h-0 flex-1 auto-rows-min grid-cols-1 content-start gap-2 overflow-y-auto px-4 pb-5 sm:grid-cols-2 xl:grid-cols-3">
+        <div className="grid min-h-0 flex-1 auto-rows-min grid-cols-2 content-start gap-2 overflow-y-auto px-4 pb-4 sm:grid-cols-3 xl:grid-cols-4">
           {dishes.length === 0 ? (
-            <div className="col-span-full flex flex-col items-center justify-center py-16">
-              <div className="text-4xl mb-4">🍽️</div>
-              <p className="text-sm text-muted-foreground text-center">
-                {search.trim() ? 'No dishes match that search' : 'No dishes in this category'}
-              </p>
-            </div>
+            <p className="col-span-full px-2 py-16 text-center text-sm text-muted-foreground">
+              {search.trim() ? 'No dishes match that search' : 'No dishes in this category'}
+            </p>
           ) : null}
           {dishes.map((dish) => {
             const category = categoryNameByItem.get(dish.id) ?? ''
-            const hasModifiers = dish.modifierGroups && dish.modifierGroups.length > 0
-            
+            const hasModifiers = !!dish.modifierGroups && dish.modifierGroups.length > 0
+
             return (
               <button
                 key={dish.id}
                 type="button"
                 disabled={!canWrite || closed || !dish.isAvailable}
                 onClick={() => handleItemClick(dish)}
-                className={cn(
-                  'group relative overflow-hidden rounded-xl border transition-all duration-200 hover:shadow-md active:scale-[0.97] disabled:opacity-40',
-                  'bg-gradient-to-br to-white/50',
-                  WASH[category] ?? 'from-stone-50'
-                )}
+                className="flex min-h-[112px] flex-col justify-between rounded-2xl border bg-card p-3.5 text-left active:scale-[0.99] disabled:opacity-40"
               >
-                {/* Content */}
-                <div className="relative p-4">
-                  {/* Dish Name */}
-                  <div className="mb-2">
-                    <h3 className="font-serif text-lg leading-tight text-left line-clamp-2">
-                      {dish.name}
-                    </h3>
-                    {dish.description && (
-                      <p className="mt-1 text-xs text-muted-foreground line-clamp-1 text-left">
-                        {dish.description}
-                      </p>
-                    )}
-                  </div>
-                  
-                  {/* Bottom Row */}
-                  <div className="flex items-center justify-between">
-                    {/* Price */}
-                    <div className="num text-lg font-serif">
-                      {formatMoney(dish.priceCents, currency)}
-                    </div>
-                    
-                    {/* Indicators */}
-                    <div className="flex items-center gap-1">
-                      {hasModifiers && (
-                        <div className="rounded-full bg-blue-100 px-2 py-1 text-xs text-blue-700">
-                          <span className="mr-1">🎛️</span>
-                          Customize
-                        </div>
-                      )}
-                      {!dish.isAvailable && (
-                        <div className="rounded-full bg-red-100 px-2 py-1 text-xs text-red-700">
-                          Out
-                        </div>
-                      )}
-                    </div>
-                  </div>
+                <div>
+                  <div className="line-clamp-2 font-serif text-lg leading-tight">{dish.name}</div>
+                  {dish.description ? <p className="mt-1 line-clamp-1 text-xs text-muted-foreground">{dish.description}</p> : null}
                 </div>
-                
-                {/* Hover Effect */}
-                <div className="absolute inset-0 bg-primary/5 opacity-0 transition-opacity group-hover:opacity-100" />
-                
-                {/* Category Badge */}
-                <div className="absolute top-2 right-2 rounded-full bg-white/80 px-2 py-1 text-xs opacity-0 transition-opacity group-hover:opacity-100">
-                  {category}
+                <div className="mt-3 flex items-end justify-between gap-2">
+                  <span className="num text-sm">{formatMoney(dish.priceCents, currency)}</span>
+                  <span className="truncate text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
+                    {!dish.isAvailable ? 'Unavailable' : hasModifiers ? 'Options' : category}
+                  </span>
                 </div>
               </button>
             )
           })}
         </div>
       </section>
-      <aside className="flex h-full min-h-0 flex-col overflow-hidden border-l bg-card">
-        {/* Order Info Header with More Button */}
-        <div className="shrink-0 p-4">
-          <div className="flex items-center justify-between">
-            <div className="flex-1" />
-            <div className="inline-flex items-center gap-2 rounded-full bg-muted/50 px-3 py-1.5 text-sm">
-              <span className="text-lg">
-                {current.type === 'DINE_IN' ? '🍽️' : '🥡'}
-              </span>
-              <span>
-                {current.type === 'DINE_IN'
-                  ? current.tableLabel
-                    ? `Table ${current.tableLabel}`
-                    : 'Dine In'
-                  : current.type === 'TAKEOUT'
-                    ? current.guestName || 'Take Out'
-                    : labelFor(current.type)}
-              </span>
-            </div>
-            <div className="flex-1 flex justify-end">
-              <button
-                className="rounded-lg bg-muted/50 p-2 hover:bg-muted transition-colors"
-                onClick={() => setDialog('actions')}
-                title="More options"
-              >
-                <span className="text-lg">⚙️</span>
-              </button>
-            </div>
-          </div>
+      <aside className="flex h-[46%] min-h-[240px] shrink-0 flex-col overflow-hidden border-t bg-card md:h-full md:min-h-0 md:border-l md:border-t-0">
+        <div className="flex shrink-0 items-center gap-2 px-4 py-3">
+          <div className="min-w-0 flex-1 truncate text-sm">{checkHeading(current)}</div>
+          <button
+            type="button"
+            className="flex h-10 w-10 items-center justify-center rounded-xl hover:bg-muted"
+            onClick={() => setDialog('actions')}
+            aria-label="More check actions"
+          >
+            <MoreHorizontal className="h-5 w-5" />
+          </button>
         </div>
-        <div className="min-h-0 flex-1 overflow-y-auto px-5 py-3">
+        <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-3">
           {lines.length === 0 ? (
-            <div className="flex h-32 items-center justify-center text-sm text-muted-foreground">
-              No items added yet
-            </div>
+            <p className="px-1 py-8 text-sm text-muted-foreground">Nothing on this check yet.</p>
           ) : (
-            <div className="space-y-3">
+            <div className="space-y-4">
               {lines.map((line) => (
-                <div key={line.id} className="group">
-                  <div className="flex items-start justify-between gap-3">
+                  <div key={line.id} className="flex items-start justify-between gap-3">
                     <div className="min-w-0 flex-1">
-                      <div className="truncate font-serif text-lg leading-tight">
-                        {line.quantity > 1 ? `${line.quantity}× ` : ''}
-                        {line.name}
-                      </div>
-                      {line.modifiers && line.modifiers.length > 0 && (
+                      <div className="truncate font-serif text-lg leading-tight">{line.name}</div>
+                      {line.modifiers && line.modifiers.length > 0 ? (
                         <div className="mt-1 text-xs text-muted-foreground">
                           {line.modifiers
                             .map((modifier) =>
@@ -463,168 +495,147 @@ export function OrderPage() {
                             )
                             .join(', ')}
                         </div>
-                      )}
-                      {line.notes && (
-                        <div className="mt-1 text-xs text-muted-foreground">Note: {line.notes}</div>
-                      )}
-                      {!line.sentAt && <div className="mt-1 text-xs text-amber-600">Pending</div>}
-                      {canWrite && !closed && (
-                        <div className="mt-1 flex gap-1 opacity-0 transition-opacity group-hover:opacity-100">
+                      ) : null}
+                      {line.notes ? <div className="mt-1 text-xs text-muted-foreground">Note: {line.notes}</div> : null}
+                      {line.unsent > 0 ? (
+                        <div className="mt-1 text-xs text-muted-foreground">
+                          {line.unsent < line.quantity ? `${line.unsent} not sent` : 'Not sent'}
+                        </div>
+                      ) : null}
+                      {canWrite && !closed ? (
+                        <div className="mt-2 flex items-center gap-1">
                           <button
                             type="button"
-                            className="flex h-7 w-7 items-center justify-center rounded-lg text-red-600 hover:bg-red-50 transition-colors"
-                            onClick={() => adjust.mutate(line.ids[line.ids.length - 1] ?? line.id)}
-                            title="Remove one"
+                            className="flex h-10 w-10 items-center justify-center rounded-xl border"
+                            onClick={() => changeQuantity(line, -1)}
+                            aria-label={`Decrease ${line.name}`}
                           >
-                            −
+                            <Minus className="h-4 w-4" />
+                          </button>
+                          <span className="num w-8 text-center text-sm">{line.quantity}</span>
+                          <button
+                            type="button"
+                            className="flex h-10 w-10 items-center justify-center rounded-xl border"
+                            onClick={() => changeQuantity(line, 1)}
+                            aria-label={`Increase ${line.name}`}
+                          >
+                            <Plus className="h-4 w-4" />
                           </button>
                           <button
                             type="button"
-                            className="flex h-7 w-7 items-center justify-center rounded-lg text-muted-foreground hover:bg-muted transition-colors"
-                            onClick={() => voidLines.mutate(line.ids)}
-                            title="Remove all"
+                            className="ml-1 flex h-10 items-center gap-1 rounded-xl px-2 text-sm text-muted-foreground hover:bg-muted"
+                            onClick={() => removeLine(line)}
+                            aria-label={`Remove ${line.name}`}
                           >
-                            ✕
+                            <X className="h-4 w-4" />
+                            Remove
                           </button>
                         </div>
+                      ) : (
+                        <div className="num mt-1 text-sm text-muted-foreground">{line.quantity}</div>
                       )}
                     </div>
-                    <div className="num shrink-0 font-serif text-lg">
-                      {formatMoney(line.unitPriceCents * line.quantity, currency)}
-                    </div>
+                    <div className="num shrink-0 text-sm">{formatMoney(line.unitPriceCents * line.quantity, currency)}</div>
                   </div>
-                </div>
               ))}
             </div>
           )}
         </div>
-        {/* Cart Summary */}
-        <div className="shrink-0 border-t bg-muted/20">
-          <div className="p-4 space-y-3">
-            {/* Breakdown - only show if there are adjustments */}
-            {(current.discountCents > 0 || current.serviceChargeCents > 0 || current.paidCents > 0 || current.refundedCents > 0) && (
-              <div className="space-y-2 text-sm">
-                {current.discountCents > 0 && (
-                  <div className="flex justify-between text-green-600">
-                    <span>{discountName(current)}</span>
-                    <span className="num">-{formatMoney(current.discountCents, currency)}</span>
-                  </div>
-                )}
-                {current.serviceChargeCents > 0 && (
-                  <div className="flex justify-between text-muted-foreground">
-                    <span>{settings.data?.serviceChargeLabel ?? 'Service'}</span>
-                    <span className="num">{formatMoney(current.serviceChargeCents, currency)}</span>
-                  </div>
-                )}
-                {current.paidCents > 0 && (
-                  <div className="flex justify-between text-muted-foreground">
-                    <span>Paid</span>
-                    <span className="num">-{formatMoney(current.paidCents, currency)}</span>
-                  </div>
-                )}
-                {current.refundedCents > 0 && (
-                  <div className="flex justify-between text-muted-foreground">
-                    <span>Refunded</span>
-                    <span className="num">-{formatMoney(current.refundedCents, currency)}</span>
-                  </div>
-                )}
-                <div className="border-t pt-2 mt-2"></div>
+        <div className="shrink-0 space-y-3 border-t px-4 py-3">
+          {showBreakdown ? (
+            <div className="space-y-1.5 text-sm text-muted-foreground">
+              <div className="flex justify-between">
+                <span>Subtotal</span>
+                <span className="num text-foreground">{formatMoney(current.subtotalCents, currency)}</span>
               </div>
-            )}
-            
-            {/* Total */}
-            <div className="flex items-center justify-between">
-              <span className="font-serif text-lg">
-                {current.paidCents > 0 && !closed ? 'Balance' : 'Total'}
-              </span>
-              <span className="num font-serif text-xl">
-                {formatMoney(current.paidCents > 0 && !closed ? current.balanceCents : current.totalCents, currency)}
-              </span>
+              {current.discountCents > 0 ? (
+                <div className="flex justify-between">
+                  <span>{discountName(current)}</span>
+                  <span className="num">-{formatMoney(current.discountCents, currency)}</span>
+                </div>
+              ) : null}
+              {current.serviceChargeCents > 0 ? (
+                <div className="flex justify-between">
+                  <span>{settings.data?.serviceChargeLabel ?? 'Service'}</span>
+                  <span className="num text-foreground">{formatMoney(current.serviceChargeCents, currency)}</span>
+                </div>
+              ) : null}
+              {current.payments.length > 1
+                ? current.payments.map((payment) => (
+                    <div key={payment.id} className="flex justify-between">
+                      <span>{PAYMENT_METHOD_LABEL[payment.method]}</span>
+                      <span className="num text-foreground">{formatMoney(payment.amountCents, currency)}</span>
+                    </div>
+                  ))
+                : null}
+              {current.payments.length > 1 && current.payments.some((payment) => payment.changeCents > 0) ? (
+                <div className="flex justify-between">
+                  <span>Change</span>
+                  <span className="num">{formatMoney(current.payments.reduce((sum, payment) => sum + payment.changeCents, 0), currency)}</span>
+                </div>
+              ) : null}
+              {current.paidCents > 0 ? (
+                <div className="flex justify-between">
+                  <span>Paid</span>
+                  <span className="num">-{formatMoney(current.paidCents, currency)}</span>
+                </div>
+              ) : null}
+              {current.refundedCents > 0 ? (
+                <div className="flex justify-between">
+                  <span>Refunded</span>
+                  <span className="num">-{formatMoney(current.refundedCents, currency)}</span>
+                </div>
+              ) : null}
             </div>
-
-            {/* Actions */}
-            <div className="flex gap-2 pt-2">
-              {canBill && !closed && (
-                <button 
-                  type="button" 
-                  className="flex-1 rounded-lg bg-muted px-3 py-2 text-sm hover:bg-muted/80 transition-colors" 
-                  onClick={() => setDialog('discount')}
-                >
-                  {current.discountCents > 0 ? 'Change Discount' : 'Add Discount'}
-                </button>
-              )}
-              {canWrite && !closed && !alreadySent && (
-                <Button 
-                  size="lg" 
-                  className="flex-1" 
-                  disabled={send.isPending || lines.length === 0} 
-                  onClick={() => send.mutate()}
-                >
-                  Send to Kitchen
-                </Button>
-              )}
-            </div>
+          ) : null}
+          <div className="flex items-center justify-between">
+            <span className="font-serif text-lg">{dueLabel}</span>
+            <span className="num font-serif text-2xl">{formatMoney(dueCents, currency)}</span>
           </div>
-        </div>
-        
-        {/* Smart Action Bar */}
-        <div className="shrink-0 border-t bg-background">
-          <div className="p-3">
-            {/* Primary Action - Context Aware */}
-            {canBill && !closed && current.balanceCents > 0 ? (
-              <button 
-                className="w-full rounded-xl bg-primary hover:bg-primary/90 px-4 py-4 text-primary-foreground shadow-lg hover:shadow-xl transition-all duration-200 active:scale-[0.98]"
-                onClick={() => setDialog('pay')}
-              >
-                <div className="flex items-center justify-center gap-3">
-                  <span className="text-2xl">💳</span>
-                  <div className="text-left">
-                    <div className="text-lg leading-tight">Pay Now</div>
-                    <div className="num text-sm opacity-90">{formatMoney(current.balanceCents, currency)}</div>
-                  </div>
-                </div>
-              </button>
-            ) : canBill && !closed && current.balanceCents === 0 && lines.length > 0 ? (
-              <button 
-                className="w-full rounded-xl bg-gradient-to-r from-blue-500 to-blue-600 px-4 py-4 text-white shadow-lg hover:shadow-xl transition-all duration-200 active:scale-[0.98]"
-                disabled={closeCheck.isPending}
-                onClick={() => closeCheck.mutate()}
-              >
-                <div className="flex items-center justify-center gap-3">
-                  <span className="text-2xl">✅</span>
-                  <div className="text-lg">Close Check</div>
-                </div>
-              </button>
-            ) : closed && current.status === 'COMPLETED' ? (
-              <button 
-                className="w-full rounded-xl bg-gradient-to-r from-gray-600 to-gray-700 px-4 py-4 text-white shadow-lg hover:shadow-xl transition-all duration-200 active:scale-[0.98]"
-                onClick={() => void handReceipt(current, 'Receipt')}
-              >
-                <div className="flex items-center justify-center gap-3">
-                  <span className="text-2xl">🧾</span>
-                  <div className="text-lg">Print Receipt</div>
-                </div>
-              </button>
+          <div className="flex gap-2">
+            {canBill && !closed ? (
+              <Button variant="outline" className="flex-1" onClick={() => setDialog('discount')}>
+                {current.discountCents > 0 ? 'Discount' : 'Add discount'}
+              </Button>
             ) : null}
-            
-            {/* Secondary Actions */}
-            {canBill && current.status === 'COMPLETED' && current.refundableCents > 0 && (
-              <div className="mt-3">
-                <button
-                  className="w-full rounded-lg bg-muted px-3 py-2.5 text-sm hover:bg-muted/80 transition-colors flex items-center justify-center gap-2"
-                  onClick={() => setDialog('refund')}
-                >
-                  <span className="text-lg">↩️</span>
-                  <span>Refund</span>
-                </button>
-              </div>
-            )}
+            {canSend ? (
+              <Button className="flex-1" disabled={send.isPending} onClick={fireKitchen}>
+                {send.isPending ? 'Sending...' : 'Send to kitchen'}
+              </Button>
+            ) : null}
           </div>
+          {canBill && !closed && current.balanceCents > 0 ? (
+            <Button size="lg" className="h-14 w-full text-base" onClick={() => setDialog('pay')}>
+              Pay
+              <span className="num">{formatMoney(current.balanceCents, currency)}</span>
+            </Button>
+          ) : null}
+          {canBill && !closed && current.balanceCents === 0 && lines.length > 0 ? (
+            <Button size="lg" className="h-14 w-full" disabled={closeCheck.isPending} onClick={() => closeCheck.mutate()}>
+              Close check
+            </Button>
+          ) : null}
+          {closed && current.status === 'COMPLETED' ? (
+            <Button size="lg" className="h-14 w-full" variant="outline" onClick={() => void handReceipt(current, 'Receipt')}>
+              Print receipt
+            </Button>
+          ) : null}
+          {canBill && current.status === 'COMPLETED' && current.refundableCents > 0 ? (
+            <Button variant="ghost" className="w-full" onClick={() => setDialog('refund')}>
+              Refund
+            </Button>
+          ) : null}
         </div>
       </aside>
 
       <Dialog open={dialog !== null} onOpenChange={(open) => !open && setDialog(null)}>
-        <DialogContent className="max-h-[calc(100%-2rem)] w-[min(520px,calc(100%-2rem))] overflow-y-auto">
+        <DialogContent
+          className={
+            dialog === 'pay'
+              ? 'top-4 max-h-[calc(100dvh-2rem)] w-[min(860px,calc(100%-1.5rem))] translate-y-0 overflow-y-auto'
+              : 'max-h-[calc(100%-2rem)] w-[min(520px,calc(100%-2rem))] overflow-y-auto'
+          }
+        >
           {dialog === 'actions' ? (
             <>
               <DialogTitle>Check</DialogTitle>
@@ -641,7 +652,14 @@ export function OrderPage() {
               </div>
             </>
           ) : null}
-          {dialog === 'pay' ? <PayDialog order={current} pending={pay.isPending} onPay={(body) => pay.mutate(body)} /> : null}
+          {dialog === 'pay' ? (
+            <PayDialog
+              order={current}
+              pending={pay.isPending || splitPay.isPending}
+              onPay={(body) => pay.mutate(body)}
+              onSplitPay={(payments) => splitPay.mutate(payments)}
+            />
+          ) : null}
           {dialog === 'discount' ? (
             <DiscountDialog order={current} pending={discount.isPending} onApply={(body) => discount.mutate(body)} />
           ) : null}
@@ -729,6 +747,28 @@ export function OrderPage() {
         </DialogContent>
       </Dialog>
       
+      <Dialog open={cancelAsk !== null} onOpenChange={(open) => !open && setCancelAsk(null)}>
+        <DialogContent className="max-h-[calc(100%-2rem)] w-[min(420px,calc(100%-2rem))]">
+          <DialogTitle>{cancelAsk?.title}</DialogTitle>
+          <p className="mt-2 text-sm text-muted-foreground">{cancelAsk?.detail}</p>
+          <div className="mt-5 flex gap-2">
+            <Button variant="outline" className="flex-1" onClick={() => setCancelAsk(null)}>
+              Keep it
+            </Button>
+            <Button
+              className="flex-1"
+              onClick={() => {
+                const run = cancelAsk?.run
+                setCancelAsk(null)
+                run?.()
+              }}
+            >
+              {cancelAsk?.confirm ?? 'Confirm'}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
       <ModifierSelectionDialog
         isOpen={modifierDialog.isOpen}
         onClose={() => setModifierDialog({ isOpen: false, item: null })}
@@ -748,8 +788,9 @@ interface TicketLine {
   notes: string
   modifiers?: Array<{ name: string; priceCents: number }>
   quantity: number
+  firedQuantity: number
+  unsent: number
   unitPriceCents: number
-  sentAt: string | null
 }
 
 /** Same dish, price, and note are one row. Quantity is the sum, shown as x1, x2, and so on. */
@@ -771,27 +812,23 @@ function groupLines(items: OrderDto['items']): TicketLine[] {
   const grouped = new Map<string, TicketLine>()
   for (const item of items) {
     if (item.voided) continue
-    
-    // Include modifiers in the grouping key to prevent incorrect grouping
+    const fired = firedOf(item)
     const modifierKey = item.modifiers
-      ? item.modifiers.map(mod => `${mod.modifierName}:${mod.priceCents}`).sort().join(',')
+      ? item.modifiers.map((mod) => `${mod.modifierName}:${mod.priceCents}`).sort().join(',')
       : ''
     const key = `${item.menuItemId ?? item.name}|${item.unitPriceCents}|${item.notes}|${modifierKey}`
-    
-    const existing = grouped.get(key)
-    if (existing) {
-      existing.quantity += item.quantity
-      existing.ids.push(item.id)
-      if (!item.sentAt) existing.sentAt = null
-      continue
-    }
-    
-    // Map modifiers for display
-    const modifiers = item.modifiers?.map(mod => ({
+    const modifiers = item.modifiers?.map((mod) => ({
       name: mod.modifierName,
       priceCents: mod.priceCents
     }))
-    
+    const existing = grouped.get(key)
+    if (existing) {
+      existing.quantity += item.quantity
+      existing.firedQuantity += fired
+      existing.unsent = Math.max(0, existing.quantity - existing.firedQuantity)
+      existing.ids.push(item.id)
+      continue
+    }
     grouped.set(key, {
       id: item.id,
       ids: [item.id],
@@ -799,11 +836,18 @@ function groupLines(items: OrderDto['items']): TicketLine[] {
       notes: item.notes,
       modifiers,
       quantity: item.quantity,
-      unitPriceCents: item.unitPriceCents,
-      sentAt: item.sentAt
+      firedQuantity: fired,
+      unsent: Math.max(0, item.quantity - fired),
+      unitPriceCents: item.unitPriceCents
     })
   }
   return [...grouped.values()]
+}
+
+function firedOf(item: OrderDto['items'][number]): number {
+  if (typeof item.firedQuantity === 'number' && item.firedQuantity > 0) return item.firedQuantity
+  if (item.sentAt) return item.quantity
+  return 0
 }
 
 /** Fills payment fields when a cached check was saved before cashier support. */
@@ -814,6 +858,10 @@ function settle(order: OrderDto): OrderDto {
   const refundedCents = order.refundedCents ?? refunds.reduce((sum, refund) => sum + refund.amountCents, 0)
   return {
     ...order,
+    items: (order.items ?? []).map((item) => ({
+      ...item,
+      firedQuantity: firedOf(item)
+    })),
     discountKind: order.discountKind ?? 'NONE',
     discountValue: order.discountValue ?? 0,
     discountCents: order.discountCents ?? 0,
@@ -825,6 +873,23 @@ function settle(order: OrderDto): OrderDto {
     balanceCents: order.balanceCents ?? Math.max(0, order.totalCents - paidCents),
     refundableCents: order.refundableCents ?? Math.max(0, Math.min(order.totalCents, paidCents) - refundedCents)
   }
+}
+
+function splitFailure(error: unknown): string {
+  if (error instanceof ApiError) {
+    if (
+      error.message === 'Invalid request' ||
+      error.message === 'Something went wrong' ||
+      error.message === 'Request failed' ||
+      error.status >= 500 ||
+      error.status === 0
+    ) {
+      return 'Transaction could not be completed. Please try again.'
+    }
+    return error.message
+  }
+  if (isNetworkError(error)) return 'Transaction could not be completed. Please try again.'
+  return 'Transaction could not be completed. Please try again.'
 }
 
 function checkHeading(order: OrderDto): string {

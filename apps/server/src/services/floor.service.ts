@@ -53,9 +53,14 @@ export async function reconcileTable(tx: Tx, tableId: string): Promise<void> {
 /**
  * Frees a table after the party leaves it.
  * Another open check keeps the table seated. A nearby reservation keeps it reserved.
- * Otherwise it goes to cleaning so the next party is not seated on a dirty table.
+ * A settled check opens the table so it can be chosen for the next order.
+ * Moving or merging a check sends the empty table to cleaning.
  */
-export async function releaseTable(tx: Tx, tableId: string | null): Promise<void> {
+export async function releaseTable(
+  tx: Tx,
+  tableId: string | null,
+  next: 'AVAILABLE' | 'CLEANING' = 'CLEANING'
+): Promise<void> {
   if (!tableId) return
   const stillOpen = await tx.order.findFirst({
     where: { tableId, status: { in: [...OPEN_ORDER_STATUSES] } }
@@ -71,7 +76,7 @@ export async function releaseTable(tx: Tx, tableId: string | null): Promise<void
     await tx.diningTable.update({ where: { id: tableId }, data: { status: 'RESERVED' } })
     return
   }
-  await tx.diningTable.update({ where: { id: tableId }, data: { status: 'CLEANING' } })
+  await tx.diningTable.update({ where: { id: tableId }, data: { status: next } })
 }
 
 /** Floor plans, table geometry, the live check, and the next reservation. */

@@ -56,8 +56,67 @@ export const ORDER_STATUSES = [
 ] as const
 export type OrderStatus = (typeof ORDER_STATUSES)[number]
 
+/** Pass state for the kitchen display. Separate from check and payment status. */
+export const KITCHEN_STATUSES = ['NEW', 'PREPARING', 'READY', 'COMPLETED'] as const
+export type KitchenStatus = (typeof KITCHEN_STATUSES)[number]
+
+/** One firing of a check. Later additions keep the same order number. */
+export const KITCHEN_SUBMISSION_KINDS = ['INITIAL', 'ADDITION'] as const
+export type KitchenSubmissionKind = (typeof KITCHEN_SUBMISSION_KINDS)[number]
+
+/** The only forward step from each kitchen state. Completed tickets leave the active pass. */
+export const KITCHEN_STATUS_STEP: Record<KitchenStatus, KitchenStatus | null> = {
+  NEW: 'PREPARING',
+  PREPARING: 'READY',
+  READY: 'COMPLETED',
+  COMPLETED: null
+}
+
+/**
+ * What the floor should show while a ticket is on the pass.
+ * Payment status stays on the check. This only describes service.
+ */
+export const SERVICE_STATUSES = ['PREPARING', 'READY_TO_SERVE'] as const
+export type ServiceStatus = (typeof SERVICE_STATUSES)[number]
+
+export const SERVICE_STATUS_LABEL: Record<ServiceStatus, string> = {
+  PREPARING: 'Preparing',
+  READY_TO_SERVE: 'Ready to serve'
+}
+
 export const DINING_PROGRESS = ['SEATED', 'ORDERED', 'PREPARING', 'SERVED', 'BILLING', 'COMPLETED'] as const
 export type DiningProgress = (typeof DINING_PROGRESS)[number]
+
+export const DINING_PROGRESS_LABEL: Record<DiningProgress, string> = {
+  SEATED: 'Seated',
+  ORDERED: 'Ordered',
+  PREPARING: 'Preparing',
+  SERVED: 'Served',
+  BILLING: 'Billing',
+  COMPLETED: 'Closed'
+}
+
+/**
+ * Floor label for one check.
+ * A finished pass is "Ready to serve". A closed or cancelled check keeps its own label.
+ */
+export function orderServiceLabel(order: {
+  status: OrderStatus
+  progress: DiningProgress
+  serviceStatus?: ServiceStatus | null
+}): string {
+  if (order.status !== 'CANCELLED' && order.status !== 'COMPLETED' && order.serviceStatus) {
+    return SERVICE_STATUS_LABEL[order.serviceStatus]
+  }
+  return DINING_PROGRESS_LABEL[order.progress]
+}
+
+/** Persisted floor state for a kitchen step. New tickets keep the check's existing progress. */
+export function serviceStatusForKitchen(status: KitchenStatus): ServiceStatus | null {
+  if (status === 'PREPARING' || status === 'READY') return 'PREPARING'
+  if (status === 'COMPLETED') return 'READY_TO_SERVE'
+  return null
+}
 
 export const ORDER_SOURCES = ['POS', 'QR', 'ONLINE'] as const
 export type OrderSource = (typeof ORDER_SOURCES)[number]
@@ -65,14 +124,57 @@ export type OrderSource = (typeof ORDER_SOURCES)[number]
 export const DISCOUNT_KINDS = ['NONE', 'PERCENT', 'AMOUNT'] as const
 export type DiscountKind = (typeof DISCOUNT_KINDS)[number]
 
-export const PAYMENT_METHODS = ['CASH', 'CARD', 'OTHER'] as const
+export const PAYMENT_METHODS = ['CASH', 'CARD', 'OTHER', 'ACCOUNT'] as const
 export type PaymentMethod = (typeof PAYMENT_METHODS)[number]
 
 export const PAYMENT_METHOD_LABEL: Record<PaymentMethod, string> = {
   CASH: 'Cash',
   CARD: 'Card',
-  OTHER: 'Other'
+  OTHER: 'Other',
+  ACCOUNT: 'Account'
 }
+
+/** Money that can be put in the drawer. Account sales are not included. */
+export const COLLECTION_METHODS = ['CASH', 'CARD', 'OTHER'] as const
+export type CollectionMethod = (typeof COLLECTION_METHODS)[number]
+
+export const AR_ACCOUNT_STATUSES = ['ACTIVE', 'INACTIVE', 'SUSPENDED', 'CLOSED'] as const
+export type ArAccountStatus = (typeof AR_ACCOUNT_STATUSES)[number]
+
+export const AR_ACCOUNT_STATUS_LABEL: Record<ArAccountStatus, string> = {
+  ACTIVE: 'Active',
+  INACTIVE: 'Inactive',
+  SUSPENDED: 'Suspended',
+  CLOSED: 'Closed'
+}
+
+export const AR_TERMS = ['DUE_IMMEDIATELY', 'NET_7', 'NET_15', 'NET_30', 'NET_45', 'NET_60', 'CUSTOM'] as const
+export type ArTerms = (typeof AR_TERMS)[number]
+
+export const AR_TERMS_LABEL: Record<ArTerms, string> = {
+  DUE_IMMEDIATELY: 'Due immediately',
+  NET_7: '7 days',
+  NET_15: '15 days',
+  NET_30: '30 days',
+  NET_45: '45 days',
+  NET_60: '60 days',
+  CUSTOM: 'Custom'
+}
+
+export const AR_INVOICE_STATUSES = ['OPEN', 'PARTIALLY_PAID', 'PAID', 'OVERDUE', 'VOIDED', 'WRITTEN_OFF'] as const
+export type ArInvoiceStatus = (typeof AR_INVOICE_STATUSES)[number]
+
+export const AR_INVOICE_STATUS_LABEL: Record<ArInvoiceStatus, string> = {
+  OPEN: 'Open',
+  PARTIALLY_PAID: 'Partially paid',
+  PAID: 'Paid',
+  OVERDUE: 'Overdue',
+  VOIDED: 'Voided',
+  WRITTEN_OFF: 'Written off'
+}
+
+export const AR_LEDGER_KINDS = ['INVOICE', 'PAYMENT', 'REFUND', 'VOID', 'WRITE_OFF'] as const
+export type ArLedgerKind = (typeof AR_LEDGER_KINDS)[number]
 
 export const MENU_STATIONS = ['KITCHEN', 'SUSHI', 'BAR', 'DESSERT'] as const
 export type MenuStation = (typeof MENU_STATIONS)[number]

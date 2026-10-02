@@ -47,7 +47,7 @@ async function apply(actor: AuthUser, op: SyncOperationInput, tx: Tx) {
       return
     case 'order.addItems': {
       const body = read(addItemsSchema.extend({ orderId: uuid }), op.payload, op.operationId)
-      await addItems(body.orderId, body, ctx)
+      await addItems(body.orderId, body, { ...ctx, actorId: actor.id })
       return
     }
     case 'order.patch': {
@@ -57,12 +57,12 @@ async function apply(actor: AuthUser, op: SyncOperationInput, tx: Tx) {
     }
     case 'order.voidItem': {
       const body = read(z.object({ orderId: uuid, itemId: uuid }), op.payload, op.operationId)
-      await voidItem(body.orderId, body.itemId, ctx)
+      await voidItem(body.orderId, body.itemId, { ...ctx, actorId: actor.id, confirmCancel: true })
       return
     }
     case 'order.send': {
       const body = read(z.object({ orderId: uuid }), op.payload, op.operationId)
-      await sendOrder(body.orderId, ctx)
+      await sendOrder(body.orderId, { ...ctx, actorId: actor.id })
       return
     }
     case 'order.progress': {
@@ -103,6 +103,9 @@ async function apply(actor: AuthUser, op: SyncOperationInput, tx: Tx) {
     }
     case 'order.pay': {
       const body = read(paymentSchema.extend({ orderId: uuid }), op.payload, op.operationId)
+      if (body.method === 'ACCOUNT') {
+        throw new SyncOpError(op.operationId, 'AR transactions require a connection.')
+      }
       await payOrder(actor, body.orderId, body, ctx)
       return
     }

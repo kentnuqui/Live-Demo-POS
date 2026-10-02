@@ -6,9 +6,27 @@ import type {
   DailyReportDto,
   DiscountInput,
   FloorPlanDto,
+  ArAccountCreateInput,
+  ArAccountDetailDto,
+  ArAccountListDto,
+  ArAccountUpdateInput,
+  ArApplyInput,
+  ArInvoiceDto,
+  ArInvoiceListDto,
+  ArLedgerPageDto,
+  ArListQuery,
+  ArPaymentDto,
+  ArPaymentInput,
+  ArPaymentListDto,
+  ArStatementDto,
+  ArSummaryDto,
+  ArVoidInput,
+  ArWriteOffInput,
   CategoryCreateInput,
   CategoryUpdateInput,
   MenuCategoryDto,
+  KitchenBoardDto,
+  KitchenTicketDto,
   MenuItemCreateInput,
   MenuItemUpdateInput,
   ModifierGroupDto,
@@ -18,6 +36,9 @@ import type {
   ModifierOptionUpdateInput,
   MenuItemModifierAssignInput,
   OrderDto,
+  OrderListDto,
+  OrderListQuery,
+  SendOrderResultDto,
   PaymentInput,
   RefundInput,
   PrinterDto,
@@ -27,7 +48,6 @@ import type {
   ReservationDto,
   ReservationInput,
   RestaurantProfileDto,
-  StationTicketDto,
   SyncPullDto,
   SyncPushSummaryDto,
   UserDto
@@ -201,8 +221,27 @@ export const api = {
     }),
   cancelReservation: (branchId: string, id: string) =>
     request<ReservationDto>(`/api/branches/${branchId}/reservations/${id}/cancel`, { method: 'POST', body: '{}' }),
+  kitchen: (branchId: string) => request<KitchenBoardDto>(`/api/branches/${branchId}/kitchen`),
+  kitchenStatus: (branchId: string, orderId: string, status: 'PREPARING' | 'READY' | 'COMPLETED') =>
+    request<KitchenTicketDto>(`/api/branches/${branchId}/kitchen/${orderId}/status`, {
+      method: 'POST',
+      body: JSON.stringify({ status })
+    }),
   orders: (branchId: string, type?: string) =>
     request<OrderDto[]>(`/api/branches/${branchId}/orders${type ? `?type=${type}` : ''}`),
+  orderBoard: (branchId: string, query: OrderListQuery) => {
+    const params = new URLSearchParams()
+    params.set('scope', query.scope)
+    params.set('focus', query.focus)
+    params.set('page', String(query.page))
+    params.set('pageSize', String(query.pageSize))
+    if (query.type) params.set('type', query.type)
+    if (query.range) params.set('range', query.range)
+    if (query.from) params.set('from', query.from)
+    if (query.to) params.set('to', query.to)
+    if (query.q) params.set('q', query.q)
+    return request<OrderListDto>(`/api/branches/${branchId}/orders?${params.toString()}`)
+  },
   createOrder: (branchId: string, body: unknown) =>
     request<OrderDto>(`/api/branches/${branchId}/orders`, { method: 'POST', body: JSON.stringify(body) }),
   order: (orderId: string) => request<OrderDto>(`/api/orders/${orderId}`),
@@ -210,15 +249,21 @@ export const api = {
     request<OrderDto>(`/api/orders/${orderId}`, { method: 'PATCH', body: JSON.stringify(body) }),
   addItems: (orderId: string, body: unknown) =>
     request<OrderDto>(`/api/orders/${orderId}/items`, { method: 'POST', body: JSON.stringify(body) }),
-  voidItem: (orderId: string, itemId: string) =>
-    request<OrderDto>(`/api/orders/${orderId}/items/${itemId}/void`, { method: 'POST', body: '{}' }),
-  adjustItem: (orderId: string, itemId: string, delta: number) =>
+  voidItem: (orderId: string, itemId: string, confirmCancel = false) =>
+    request<OrderDto>(`/api/orders/${orderId}/items/${itemId}/void`, {
+      method: 'POST',
+      body: JSON.stringify({ confirmCancel })
+    }),
+  adjustItem: (orderId: string, itemId: string, delta: number, confirmCancel = false) =>
     request<OrderDto>(`/api/orders/${orderId}/items/${itemId}/quantity`, {
       method: 'POST',
-      body: JSON.stringify({ delta })
+      body: JSON.stringify({ delta, confirmCancel })
     }),
-  send: (orderId: string) =>
-    request<{ order: OrderDto; tickets: StationTicketDto[] }>(`/api/orders/${orderId}/send`, { method: 'POST', body: '{}' }),
+  send: (orderId: string, idempotencyKey: string) =>
+    request<SendOrderResultDto>(`/api/orders/${orderId}/send`, {
+      method: 'POST',
+      body: JSON.stringify({ idempotencyKey })
+    }),
   progress: (orderId: string, status: string) =>
     request<OrderDto>(`/api/orders/${orderId}/progress`, { method: 'POST', body: JSON.stringify({ status }) }),
   transfer: (orderId: string, tableId: string) =>
@@ -232,11 +277,57 @@ export const api = {
     request<OrderDto>(`/api/orders/${orderId}/discount`, { method: 'POST', body: JSON.stringify(body) }),
   pay: (orderId: string, body: PaymentInput) =>
     request<OrderDto>(`/api/orders/${orderId}/pay`, { method: 'POST', body: JSON.stringify(body) }),
+  paySplit: (orderId: string, payments: PaymentInput[]) =>
+    request<OrderDto>(`/api/orders/${orderId}/pay-split`, { method: 'POST', body: JSON.stringify({ payments }) }),
   refund: (orderId: string, body: RefundInput) =>
     request<OrderDto>(`/api/orders/${orderId}/refund`, { method: 'POST', body: JSON.stringify(body) }),
   finish: (orderId: string) => request<OrderDto>(`/api/orders/${orderId}/finish`, { method: 'POST', body: '{}' }),
   dailyReport: (branchId: string, day?: string) =>
     request<DailyReportDto>(`/api/branches/${branchId}/reports/daily${day ? `?day=${day}` : ''}`),
+  arSummary: (branchId: string) => request<ArSummaryDto>(`/api/branches/${branchId}/ar/summary`),
+  arAccounts: (branchId: string, query: Partial<ArListQuery> = {}) =>
+    request<ArAccountListDto>(`/api/branches/${branchId}/ar/accounts${queryString(query)}`),
+  arAccount: (branchId: string, accountId: string) =>
+    request<ArAccountDetailDto>(`/api/branches/${branchId}/ar/accounts/${accountId}`),
+  createArAccount: (branchId: string, body: ArAccountCreateInput) =>
+    request<ArAccountDetailDto['account']>(`/api/branches/${branchId}/ar/accounts`, { method: 'POST', body: JSON.stringify(body) }),
+  updateArAccount: (branchId: string, accountId: string, body: ArAccountUpdateInput) =>
+    request<ArAccountDetailDto['account']>(`/api/branches/${branchId}/ar/accounts/${accountId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(body)
+    }),
+  arLedger: (branchId: string, accountId: string, query: Partial<ArListQuery> = {}) =>
+    request<ArLedgerPageDto>(`/api/branches/${branchId}/ar/accounts/${accountId}/ledger${queryString(query)}`),
+  arStatement: (branchId: string, accountId: string, from: string, to: string) =>
+    request<ArStatementDto>(`/api/branches/${branchId}/ar/accounts/${accountId}/statement?from=${from}&to=${to}`),
+  arInvoices: (branchId: string, query: Partial<ArListQuery> = {}) =>
+    request<ArInvoiceListDto>(`/api/branches/${branchId}/ar/invoices${queryString(query)}`),
+  arInvoice: (branchId: string, invoiceId: string) => request<ArInvoiceDto>(`/api/branches/${branchId}/ar/invoices/${invoiceId}`),
+  voidArInvoice: (branchId: string, invoiceId: string, body: ArVoidInput) =>
+    request<ArInvoiceDto>(`/api/branches/${branchId}/ar/invoices/${invoiceId}/void`, {
+      method: 'POST',
+      body: JSON.stringify(body)
+    }),
+  writeOffArInvoice: (branchId: string, invoiceId: string, body: ArWriteOffInput) =>
+    request<ArInvoiceDto>(`/api/branches/${branchId}/ar/invoices/${invoiceId}/write-off`, {
+      method: 'POST',
+      body: JSON.stringify(body)
+    }),
+  arPayments: (branchId: string, query: Partial<ArListQuery> = {}) =>
+    request<ArPaymentListDto>(`/api/branches/${branchId}/ar/payments${queryString(query)}`),
+  createArPayment: (branchId: string, body: ArPaymentInput) =>
+    request<ArPaymentDto>(`/api/branches/${branchId}/ar/payments`, { method: 'POST', body: JSON.stringify(body) }),
+  applyArPayment: (branchId: string, paymentId: string, body: ArApplyInput) =>
+    request<ArPaymentDto>(`/api/branches/${branchId}/ar/payments/${paymentId}/apply`, {
+      method: 'POST',
+      body: JSON.stringify(body)
+    }),
+  arOutstanding: (branchId: string, query: Partial<ArListQuery> = {}) =>
+    request<ArInvoiceListDto>(`/api/branches/${branchId}/ar/reports/outstanding${queryString(query)}`),
+  arCollections: (branchId: string, query: Partial<ArListQuery> = {}) =>
+    request<ArPaymentListDto>(`/api/branches/${branchId}/ar/reports/collections${queryString(query)}`),
+  arSales: (branchId: string, query: Partial<ArListQuery> = {}) =>
+    request<ArInvoiceListDto>(`/api/branches/${branchId}/ar/reports/sales${queryString(query)}`),
   push: (operations: unknown[]) =>
     request<SyncPushSummaryDto>('/api/sync/push', { method: 'POST', body: JSON.stringify({ operations }) }),
   pull: (branchId: string, lastSyncTimestamp?: string) => {
@@ -246,6 +337,15 @@ export const api = {
   },
   qr: (token: string) => request<QrContext>(`/api/qr/${token}`),
   qrOrder: (token: string, body: unknown) => request<OrderDto>(`/api/qr/${token}/orders`, { method: 'POST', body: JSON.stringify(body) })
+}
+
+function queryString(query: object): string {
+  const params = new URLSearchParams()
+  for (const [key, value] of Object.entries(query)) {
+    if (value !== undefined && value !== '') params.set(key, String(value))
+  }
+  const text = params.toString()
+  return text ? `?${text}` : ''
 }
 
 export interface QrContext {

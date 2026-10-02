@@ -12,6 +12,10 @@ export interface TicketHeader {
   showServer: boolean
   when: string
   banner?: string
+  /** Guest check number. The same number is reused for later kitchen submissions. */
+  ticketNumber?: number | null
+  /** True when this chit is food added after the first send. */
+  addition?: boolean
 }
 
 export interface TicketLineItem {
@@ -38,7 +42,10 @@ function serviceLabel(orderType: string): string {
 function headerLines(header: TicketHeader, title: string): string[] {
   const lines = [header.restaurantName]
   if (header.banner && header.banner !== header.restaurantName) lines.push(header.banner)
-  lines.push(title, rule(), header.when)
+  lines.push(title)
+  if (header.addition) lines.push('ADDITIONAL ORDER')
+  if (header.ticketNumber) lines.push(`Order #${header.ticketNumber}`)
+  lines.push(rule(), header.when)
   lines.push(serviceLabel(header.orderType))
   if (header.showTable && header.tableLabel) lines.push(`Table ${header.tableLabel}`)
   if (header.guestName) lines.push(header.guestName)
@@ -75,6 +82,14 @@ export function buildStationTicket(
   return lines
 }
 
+export interface ReceiptAr {
+  accountName: string
+  invoiceNumber: string
+  dueDate: string
+  balanceDueCents: number
+  termsLabel: string
+}
+
 export interface ReceiptTotals {
   currency: string
   subtotalCents: number
@@ -85,6 +100,7 @@ export interface ReceiptTotals {
   totalCents: number
   payments: Array<{ method: string; amountCents: number; tenderedCents: number; changeCents: number }>
   refunds: Array<{ method: string; amountCents: number; reason: string }>
+  ar?: ReceiptAr
 }
 
 /** Guest receipt, including the discount, tenders, change, and any refund. */
@@ -122,13 +138,24 @@ export function buildReceipt(header: TicketHeader, items: TicketLineItem[], tota
   lines.push(`Total  ${money(totals.totalCents)}`)
   if (totals.payments.length > 0) {
     lines.push(rule())
+    if (totals.payments.length > 1) lines.push('Payment')
     for (const payment of totals.payments) {
-      lines.push(`${payment.method}  ${money(payment.amountCents)}`)
+      const accountSale = payment.method === 'Account' || payment.method === 'ACCOUNT'
+      lines.push(`${accountSale ? 'ACCOUNT SALE' : payment.method}  ${money(payment.amountCents)}`)
       if (payment.tenderedCents > payment.amountCents) {
         lines.push(`Tendered  ${money(payment.tenderedCents)}`)
         lines.push(`Change  ${money(payment.changeCents)}`)
       }
     }
+  }
+  if (totals.ar) {
+    lines.push(rule())
+    lines.push('ACCOUNTS RECEIVABLE')
+    lines.push(`Account  ${totals.ar.accountName}`)
+    lines.push(`Invoice  ${totals.ar.invoiceNumber}`)
+    lines.push(`Balance due  ${money(totals.ar.balanceDueCents)}`)
+    lines.push(`Due  ${totals.ar.dueDate}`)
+    lines.push(totals.ar.termsLabel)
   }
   if (totals.refunds.length > 0) {
     lines.push(rule())
